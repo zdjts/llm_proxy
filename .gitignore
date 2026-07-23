@@ -1,0 +1,14 @@
+/target
+/.vscode
+/.idea
+*.swp
+*.swo
+*~
+.DS_Store
+.env
+*.env
+config.yaml
+!tests/fixtures/config.yaml
+data/
+test-gateway.sh
+docs/

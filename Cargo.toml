@@ -1,0 +1,41 @@
+[package]
+name = "llm_proxy"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+axum = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
+thiserror = "2"
+anyhow = "1"
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio-rustls", "migrate", "derive"] }
+rand = "0.8"
+uuid = { version = "1", default-features = false, features = ["v4"] }
+futures = "0.3"
+async-trait = "0.1"
+dashmap = "6"
+tokio-stream = "0.1"
+bytes = "1"
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
+tower-http = { version = "0.6", features = ["limit"] }
+askama = "0.12"
+
+[dev-dependencies]
+tempfile = "3"
+mockito = "1"
+tower = "0.5"
+
+[profile.release]
+opt-level = "z"      # 从默认的 3 改为 "z"，专门优化大小
+lto = true           # 保持开启，进行全局链接时优化
+codegen-units = 1    # 保持开启，减少并行编译以换取更小的体积
+strip = "symbols"    # 保持开启，剥离符号表
+panic = "abort"      # 核心重点：移除异常展开逻辑，直接能砍掉大几十KB甚至上百KB

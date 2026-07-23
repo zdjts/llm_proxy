@@ -1,0 +1,182 @@
+//! Per-tenant pricing config — ADR-014 §2 (T59).
+//!
+//! Supports two YAML shapes for backward compatibility:
+//! 1. V2 nested: `pricing: { models: { "<model>": { default: {...}, tenants: {...} } } }`
+//! 2. V1 flat:    `pricing: { "<model>": { prompt: ..., completion: ... } }`
+//!
+//! The `lookup_pricing` helper resolves tenant-specific overrides.
+
+use std::collections::HashMap;
+
+use serde::Deserialize;
+
+/// V1-compatible per-model price entry.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PriceEntry {
+    #[serde(default)]
+    pub prompt: f64,
+    #[serde(default)]
+    pub completion: f64,
+}
+
+impl Default for PriceEntry {
+    fn default() -> Self {
+        Self {
+            prompt: 0.0,
+            completion: 0.0,
+        }
+    }
+}
+
+/// Unified pricing model with optional per-tenant overrides.
+#[derive(Debug, Clone, Default)]
+pub struct PricingConfig {
+    pub models: HashMap<String, ModelPricing>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelPricing {
+    pub default: PriceEntry,
+    pub tenants: HashMap<String, PriceEntry>,
+}
+
+impl PricingConfig {
+    /// Look up the effective price for a (model, tenant) pair.
+    /// Falls back: tenants[tenant] → default → zero.
+    pub fn lookup(&self, model: &str, tenant: Option<&str>) -> &PriceEntry {
+        static ZERO: PriceEntry = PriceEntry {
+            prompt: 0.0,
+            completion: 0.0,
+        };
+        let mp = match self.models.get(model) {
+            Some(mp) => mp,
+            None => return &ZERO,
+        };
+        if let Some(t) = tenant
+            && let Some(pe) = mp.tenants.get(t)
+        {
+            return pe;
+        }
+        &mp.default
+    }
+}
+
+// ── Serde deserialization ───────────────────────────────────────────────
+
+impl<'de> Deserialize<'de> for PricingConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawPricing::deserialize(deserializer)?;
+        Ok(match raw {
+            RawPricing::V2 { models } => PricingConfig {
+                models: models.into_iter().map(|(k, v)| (k, v.into())).collect(),
+            },
+            RawPricing::V1(flat) => {
+                let models = flat
+                    .into_iter()
+                    .map(|(model, price)| {
+                        (
+                            model,
+                            ModelPricing {
+                                default: price,
+                                tenants: HashMap::new(),
+                            },
+                        )
+                    })
+                    .collect();
+                PricingConfig { models }
+            }
+        })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawPricing {
+    V2 {
+        models: HashMap<String, RawModelPricing>,
+    },
+    V1(HashMap<String, PriceEntry>),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RawModelPricing {
+    #[serde(default)]
+    default: PriceEntry,
+    #[serde(default)]
+    tenants: HashMap<String, PriceEntry>,
+}
+
+impl From<RawModelPricing> for ModelPricing {
+    fn from(r: RawModelPricing) -> Self {
+        ModelPricing {
+            default: r.default,
+            tenants: r.tenants,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deserialize_v1_flat() {
+        let yaml = "gpt-4o:\n  prompt: 2.5\n  completion: 10.0";
+        let cfg: PricingConfig = serde_yaml::from_str(yaml).unwrap();
+        let price = cfg.lookup("gpt-4o", None);
+        assert_eq!(price.prompt, 2.5);
+        assert_eq!(price.completion, 10.0);
+    }
+
+    #[test]
+    fn deserialize_v2_nested() {
+        let yaml = r#"
+models:
+  gpt-4o:
+    default:
+      prompt: 2.5
+      completion: 10.0
+    tenants:
+      alice:
+        prompt: 2.0
+        completion: 8.0
+"#;
+        let cfg: PricingConfig = serde_yaml::from_str(yaml).unwrap();
+        let d = cfg.lookup("gpt-4o", None);
+        assert_eq!(d.prompt, 2.5);
+        assert_eq!(d.completion, 10.0);
+        let a = cfg.lookup("gpt-4o", Some("alice"));
+        assert_eq!(a.prompt, 2.0);
+        assert_eq!(a.completion, 8.0);
+    }
+
+    #[test]
+    fn lookup_missing_model_returns_zero() {
+        let cfg = PricingConfig::default();
+        let p = cfg.lookup("nonexistent", None);
+        assert_eq!(p.prompt, 0.0);
+        assert_eq!(p.completion, 0.0);
+    }
+
+    #[test]
+    fn lookup_tenant_missing_falls_back_to_default() {
+        let yaml = r#"
+models:
+  gpt-4o:
+    default:
+      prompt: 2.5
+      completion: 10.0
+    tenants:
+      alice:
+        prompt: 2.0
+        completion: 8.0
+"#;
+        let cfg: PricingConfig = serde_yaml::from_str(yaml).unwrap();
+        let bob = cfg.lookup("gpt-4o", Some("bob"));
+        assert_eq!(bob.prompt, 2.5);
+        assert_eq!(bob.completion, 10.0);
+    }
+}
