@@ -22,6 +22,9 @@ fn test_request(model: &str, content: &str) -> ChatCompletionRequest {
         presence_penalty: None,
         frequency_penalty: None,
         user: None,
+        tools: None,
+        tool_choice: None,
+        stream_options: None,
     }
 }
 

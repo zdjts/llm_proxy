@@ -148,11 +148,30 @@ async fn chat_completions_handler(
     State(state): State<AppState>,
     axum::Extension(client): axum::Extension<AuthedClient>,
     axum::Extension(RequestId(request_id)): axum::Extension<RequestId>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<ChatCompletionRequest>,
 ) -> Result<Response, AppError> {
     let tenant_id = client.tenant_id.clone();
     let start = SystemTime::now();
     let model = req.model.clone();
+
+    tracing::debug!("============================================================");
+    tracing::debug!(
+        "▶ POST /v1/chat/completions | model={} | stream={}",
+        req.model,
+        req.stream.unwrap_or(false)
+    );
+    tracing::debug!("  headers:");
+    for (name, value) in headers.iter() {
+        if name.as_str().to_lowercase() == "authorization" {
+            tracing::debug!("    {name}: <redacted>");
+        } else {
+            tracing::debug!("    {name}: {:?}", value);
+        }
+    }
+    if let Ok(body) = serde_json::to_string_pretty(&req) {
+        tracing::debug!("  request body:\n{}", body);
+    }
 
     if !req.stream.unwrap_or(false)
         && req.temperature.unwrap_or(0.0) < 0.01
@@ -222,6 +241,16 @@ async fn chat_completions_handler(
 
                 match resp {
                     ProviderResponse::Once(ref chat_resp) => {
+                        tracing::debug!(
+                            "◀ {} | latency={}ms | pool={}",
+                            200,
+                            elapsed.as_millis(),
+                            pool_id
+                        );
+                        if let Ok(body) = serde_json::to_string_pretty(chat_resp) {
+                            tracing::debug!("  response body:\n{}", body);
+                        }
+
                         let from_provider = provider.extract_audit(&resp);
                         let from_router = AuditFromRouter {
                             retry_count: retries.len() as i32,
@@ -273,6 +302,11 @@ async fn chat_completions_handler(
                         return Ok((StatusCode::OK, Json(chat_resp)).into_response());
                     }
                     ProviderResponse::Stream { body } => {
+                        tracing::debug!(
+                            "▶ streaming start | model={} | pool={}",
+                            req.model,
+                            pool_id
+                        );
                         let stream_response = build_stream_response(
                             StreamContext {
                                 request_id: request_id.clone(),
@@ -387,17 +421,33 @@ fn build_stream_response(
 
     tokio::spawn(async move {
         let mut inspector = StreamInspector::new();
+        let mut buf: Vec<u8> = Vec::new();
 
         while let Some(bytes) = rx.recv().await {
-            for line in bytes.split(|b| *b == b'\n') {
+            buf.extend_from_slice(&bytes);
+            while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+                let line = &buf[..pos];
                 inspector.ingest_chunk(line);
+                buf.drain(..=pos);
             }
+        }
+        if !buf.is_empty() {
+            inspector.ingest_chunk(&buf);
         }
 
         let ttft_ms = inspector.ttft_ms();
         let from_provider = inspector.into_audit();
         let summary = inspector.finalize();
         let usage = summary.usage.unwrap_or_default();
+
+        tracing::debug!(
+            "◀ streaming end | model={} | prompt_tokens={} | completion_tokens={} | ttft_ms={:?} | finish_reason={:?}",
+            inspector_model,
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            ttft_ms,
+            summary.finish_reason,
+        );
 
         let from_router = AuditFromRouter {
             retry_count: inspector_retries,

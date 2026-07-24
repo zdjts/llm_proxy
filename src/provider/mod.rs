@@ -183,6 +183,9 @@ mod tests {
             presence_penalty: None,
             frequency_penalty: None,
             user: None,
+            tools: None,
+            tool_choice: None,
+            stream_options: None,
         };
 
         let result = provider.chat(req, &key).await;
@@ -211,6 +214,9 @@ mod tests {
                     presence_penalty: None,
                     frequency_penalty: None,
                     user: None,
+                    tools: None,
+                    tool_choice: None,
+                    stream_options: None,
                 },
                 &KeyEntry {
                     key: "k".into(),

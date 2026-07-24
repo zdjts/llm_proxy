@@ -30,15 +30,26 @@ pub struct ChatCompletionRequest {
     pub frequency_penalty: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<serde_json::Value>,
 }
 
 /// A single message in the conversation history.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Message {
     pub role: String,
+    #[serde(default)]
     pub content: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 /// Non-streaming chat completion response.
@@ -223,12 +234,32 @@ mod tests {
     }
 
     #[test]
-    fn it_handles_tool_calls_in_request() {
+    fn it_handles_tool_calls_in_request_with_null_content() {
         let json = r#"{
             "model":"gpt-4o",
             "messages":[{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"NYC\"}"}}]}]
         }"#;
         let req: ChatCompletionRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.messages[0].role, "assistant");
+        assert!(req.messages[0].content.is_null());
+        assert!(req.messages[0].tool_calls.is_some());
+    }
+
+    #[test]
+    fn it_handles_tool_calls_without_content() {
+        let json = r#"{
+            "model":"gpt-4o",
+            "messages":[{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"shell","arguments":"{}"}}]}]
+        }"#;
+        let req: ChatCompletionRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.messages[0].role, "assistant");
+        assert!(req.messages[0].content.is_null());
+        assert!(req.messages[0].tool_calls.is_some());
+        assert_eq!(
+            req.messages[0].tool_calls.as_ref().unwrap()[0]
+                .function
+                .name,
+            "shell"
+        );
     }
 }
