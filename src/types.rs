@@ -36,6 +36,8 @@ pub struct ChatCompletionRequest {
     pub tool_choice: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_options: Option<serde_json::Value>,
+    #[serde(flatten, default)]
+    pub extra: serde_json::Value,
 }
 
 /// A single message in the conversation history.

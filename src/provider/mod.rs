@@ -186,6 +186,7 @@ mod tests {
             tools: None,
             tool_choice: None,
             stream_options: None,
+            extra: serde_json::Value::Null,
         };
 
         let result = provider.chat(req, &key).await;
@@ -217,6 +218,7 @@ mod tests {
                     tools: None,
                     tool_choice: None,
                     stream_options: None,
+                    extra: serde_json::Value::Null,
                 },
                 &KeyEntry {
                     key: "k".into(),

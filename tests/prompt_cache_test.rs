@@ -25,6 +25,7 @@ fn test_request(model: &str, content: &str) -> ChatCompletionRequest {
         tools: None,
         tool_choice: None,
         stream_options: None,
+        extra: serde_json::Value::Null,
     }
 }
 

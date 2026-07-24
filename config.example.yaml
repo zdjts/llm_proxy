@@ -52,7 +52,13 @@ providers:
 model_to_pool:
   # 显式映射：请求里 client 传哪个 model 走哪个 pool
   # 未命中 → 404 model_not_found
+  # 支持两种格式：
+  #   简单格式："model": pool_id
+  #   完整格式："model": { pool: pool_id, default_params: {...} }
   "gpt-4o": openai_pool
   "gpt-4o-mini": openai_pool
   "deepseek-chat": deepseek_pool
-  "deepseek-reasoner": deepseek_pool
+  "deepseek-reasoner":
+    pool: deepseek_pool
+    default_params:
+      thinking: { level: "low" }

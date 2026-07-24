@@ -149,7 +149,7 @@ async fn chat_completions_handler(
     axum::Extension(client): axum::Extension<AuthedClient>,
     axum::Extension(RequestId(request_id)): axum::Extension<RequestId>,
     headers: axum::http::HeaderMap,
-    Json(req): Json<ChatCompletionRequest>,
+    Json(mut req): Json<ChatCompletionRequest>,
 ) -> Result<Response, AppError> {
     let tenant_id = client.tenant_id.clone();
     let start = SystemTime::now();
@@ -202,7 +202,15 @@ async fn chat_completions_handler(
         return Ok((StatusCode::OK, Json(cached)).into_response());
     }
 
-    let (provider, pool, pool_id) = state.router.resolve(&model)?;
+    let (provider, pool, pool_id, default_params) = state.router.resolve(&model)?;
+
+    if let (Some(serde_json::Value::Object(pm)), serde_json::Value::Object(extra)) =
+        (default_params, &mut req.extra)
+    {
+        for (k, v) in pm {
+            extra.entry(k.clone()).or_insert(v.clone());
+        }
+    }
 
     let mut retries: Vec<String> = Vec::new();
 

@@ -20,7 +20,7 @@ pub struct Config {
     pub failover: FailoverConfig,
     pub pools: HashMap<String, PoolConfig>,
     pub providers: Vec<ProviderConfig>,
-    pub model_to_pool: HashMap<String, String>,
+    pub model_to_pool: HashMap<String, ModelRouting>,
     #[serde(default)]
     pub admin: AdminConfig,
     #[serde(default)]
@@ -152,6 +152,47 @@ pub struct ProviderConfig {
     pub kind: ProviderKind,
 }
 
+/// Model-to-pool routing entry. Accepts either a plain pool-id string or an
+/// object with `pool` and optional `default_params` for request injection.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum ModelRouting {
+    Simple(String),
+    WithParams {
+        pool: String,
+        #[serde(default)]
+        default_params: serde_json::Value,
+    },
+}
+
+impl ModelRouting {
+    pub fn pool_id(&self) -> &str {
+        match self {
+            ModelRouting::Simple(s) => s,
+            ModelRouting::WithParams { pool, .. } => pool,
+        }
+    }
+
+    pub fn default_params(&self) -> Option<&serde_json::Value> {
+        match self {
+            ModelRouting::Simple(_) => None,
+            ModelRouting::WithParams { default_params, .. } => {
+                if default_params.is_object() {
+                    Some(default_params)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+}
+
+impl From<&str> for ModelRouting {
+    fn from(s: &str) -> Self {
+        ModelRouting::Simple(s.to_owned())
+    }
+}
+
 /// Admin dashboard configuration.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct AdminConfig {
@@ -250,7 +291,8 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<(), crate::error::AppError> {
-        for (model, pool_id) in &self.model_to_pool {
+        for (model, routing) in &self.model_to_pool {
+            let pool_id = routing.pool_id();
             if !self.pools.contains_key(pool_id) {
                 return Err(crate::error::AppError::Config(format!(
                     "Model '{model}' references pool '{pool_id}' which does not exist",

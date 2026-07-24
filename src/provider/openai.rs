@@ -306,6 +306,7 @@ mod tests {
             tools: None,
             tool_choice: None,
             stream_options: None,
+            extra: serde_json::Value::Null,
         };
 
         let result = p

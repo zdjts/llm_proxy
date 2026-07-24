@@ -95,10 +95,17 @@ impl Default for BadKeyRegistry {
     }
 }
 
+pub type ResolveResult<'a> = (
+    Arc<dyn Provider>,
+    &'a PoolConfig,
+    &'a str,
+    Option<&'a serde_json::Value>,
+);
+
 /// Routes model names to provider pool + key selection.
 pub struct Router {
-    /// `model → (pool_id, PoolConfig)`
-    model_map: HashMap<String, (String, PoolConfig)>,
+    /// `model → (pool_id, PoolConfig, default_params)`
+    model_map: HashMap<String, (String, PoolConfig, Option<serde_json::Value>)>,
     /// `pool_id → Arc<dyn Provider>`
     providers: HashMap<String, Arc<dyn Provider>>,
     bad_keys: Arc<BadKeyRegistry>,
@@ -106,7 +113,7 @@ pub struct Router {
 
 impl Router {
     pub fn new(
-        model_map: HashMap<String, (String, PoolConfig)>,
+        model_map: HashMap<String, (String, PoolConfig, Option<serde_json::Value>)>,
         providers: HashMap<String, Arc<dyn Provider>>,
         bad_keys: Arc<BadKeyRegistry>,
     ) -> Self {
@@ -118,8 +125,8 @@ impl Router {
     }
 
     /// Look up the provider and pool for a model name.
-    pub fn resolve(&self, model: &str) -> Result<(Arc<dyn Provider>, &PoolConfig, &str), AppError> {
-        let (pool_id, pool) = self
+    pub fn resolve(&self, model: &str) -> Result<ResolveResult<'_>, AppError> {
+        let (pool_id, pool, default_params) = self
             .model_map
             .get(model)
             .ok_or_else(|| AppError::NotFound(format!("model '{model}' not found")))?;
@@ -127,7 +134,12 @@ impl Router {
             .providers
             .get(pool_id)
             .ok_or_else(|| AppError::Config(format!("pool '{pool_id}' not found")))?;
-        Ok((Arc::clone(provider), pool, pool_id.as_str()))
+        Ok((
+            Arc::clone(provider),
+            pool,
+            pool_id.as_str(),
+            default_params.as_ref(),
+        ))
     }
 
     /// Select a key from the pool via weighted-random sampling, skipping bad keys.
@@ -187,7 +199,7 @@ impl Router {
     pub fn pool_snapshot(&self) -> Vec<PoolSnapshot> {
         let mut seen = std::collections::HashSet::new();
         let mut snapshots = Vec::new();
-        for (pool_id, pool_cfg) in self.model_map.values() {
+        for (pool_id, pool_cfg, _) in self.model_map.values() {
             if !seen.insert(pool_id.clone()) {
                 continue;
             }

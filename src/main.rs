@@ -81,14 +81,23 @@ async fn main() -> anyhow::Result<()> {
         providers.insert(p.pool_id.clone(), prov);
     }
 
-    let model_map: HashMap<String, (String, llm_proxy::config::PoolConfig)> = config
+    let model_map: HashMap<
+        String,
+        (
+            String,
+            llm_proxy::config::PoolConfig,
+            Option<serde_json::Value>,
+        ),
+    > = config
         .model_to_pool
         .iter()
-        .map(|(model, pool_id)| {
-            let pool_cfg = config.pools.get(pool_id).cloned().unwrap_or_else(|| {
+        .map(|(model, routing)| {
+            let pool_id = routing.pool_id().to_string();
+            let pool_cfg = config.pools.get(&pool_id).cloned().unwrap_or_else(|| {
                 panic!("pool '{pool_id}' not found for model '{model}'");
             });
-            (model.clone(), (pool_id.clone(), pool_cfg))
+            let params = routing.default_params().cloned();
+            (model.clone(), (pool_id, pool_cfg, params))
         })
         .collect();
 
