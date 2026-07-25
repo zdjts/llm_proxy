@@ -22,6 +22,8 @@ pub struct Config {
     pub providers: Vec<ProviderConfig>,
     pub model_to_pool: HashMap<String, ModelRouting>,
     #[serde(default)]
+    pub bootstrap_admin: BootstrapAdminConfig,
+    #[serde(default)]
     pub admin: AdminConfig,
     #[serde(default)]
     pub pricing: pricing::PricingConfig,
@@ -31,6 +33,12 @@ pub struct Config {
     pub cache_max_entries: usize,
     #[serde(default)]
     pub alerts: AlertConfig,
+    #[serde(default)]
+    pub acl: crate::auth::acl::AclConfig,
+    #[serde(default)]
+    pub fallback_models: crate::fallback::FallbackConfig,
+    #[serde(default)]
+    pub concurrency: ConcurrencyConfig,
 }
 
 /// HTTP server bind settings.
@@ -69,6 +77,8 @@ pub struct FailoverConfig {
     /// HTTP status codes that mark a key as bad. Default: [401, 402, 403, 429].
     #[serde(default = "default_bad_status_codes")]
     pub bad_status_codes: Vec<u16>,
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
     #[serde(default = "default_probe_interval")]
     pub probe_interval_secs: u64,
     #[serde(default = "default_probe_timeout")]
@@ -97,6 +107,10 @@ fn default_max_probe_retries() -> u32 {
     3
 }
 
+fn default_max_retries() -> u32 {
+    1
+}
+
 /// Key-selection strategy for a pool. Per ADR §3.1 must be an enum.
 #[derive(Debug, Clone, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -113,6 +127,12 @@ pub enum ProviderKind {
     OpenAi,
     Anthropic,
     Gemini,
+    Azure,
+    Bedrock,
+    Cohere,
+    Mistral,
+    Ollama,
+    Vllm,
 }
 
 fn default_kind() -> ProviderKind {
@@ -120,7 +140,7 @@ fn default_kind() -> ProviderKind {
 }
 
 /// Pool configuration: a collection of API keys with a selection strategy.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct PoolConfig {
     pub keys: Vec<KeyEntry>,
     /// Key-selection strategy. Defaults to [`PoolStrategy::WeightedRandom`].
@@ -129,7 +149,7 @@ pub struct PoolConfig {
 }
 
 /// An upstream API key entry with its routing weight.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct KeyEntry {
     /// The upstream API key (plaintext, stored only in config).
     pub key: String,
@@ -139,7 +159,7 @@ pub struct KeyEntry {
 }
 
 /// Upstream provider definition.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct ProviderConfig {
     /// Unique provider identifier, e.g. "openai", "deepseek".
     pub id: String,
@@ -150,11 +170,20 @@ pub struct ProviderConfig {
     /// Provider kind for dispatch. Defaults to `openai`.
     #[serde(default = "default_kind")]
     pub kind: ProviderKind,
+    /// Azure API version (Azure only).
+    #[serde(default)]
+    pub api_version: Option<String>,
+    /// AWS region (Bedrock only).
+    #[serde(default)]
+    pub region: Option<String>,
+    /// Arbitrary provider-specific metadata (JSON).
+    #[serde(default)]
+    pub metadata: serde_json::Value,
 }
 
 /// Model-to-pool routing entry. Accepts either a plain pool-id string or an
 /// object with `pool` and optional `default_params` for request injection.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(untagged)]
 pub enum ModelRouting {
     Simple(String),
@@ -193,6 +222,25 @@ impl From<&str> for ModelRouting {
     }
 }
 
+/// Optional first-admin bootstrap configuration.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct BootstrapAdminConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub email: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub password: String,
+    #[serde(default = "default_bootstrap_role")]
+    pub role: String,
+}
+
+fn default_bootstrap_role() -> String {
+    "owner".into()
+}
+
 /// Admin dashboard configuration.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct AdminConfig {
@@ -221,6 +269,32 @@ fn default_rpm() -> usize {
 
 fn default_cache_max() -> usize {
     256
+}
+
+/// Per-tenant concurrency limits.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConcurrencyConfig {
+    #[serde(default = "default_concurrency")]
+    pub max_per_tenant: usize,
+    #[serde(default = "default_total_concurrency")]
+    pub total_max: usize,
+}
+
+impl Default for ConcurrencyConfig {
+    fn default() -> Self {
+        Self {
+            max_per_tenant: default_concurrency(),
+            total_max: default_total_concurrency(),
+        }
+    }
+}
+
+fn default_concurrency() -> usize {
+    50
+}
+
+fn default_total_concurrency() -> usize {
+    500
 }
 
 /// Alert / webhook configuration.

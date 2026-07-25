@@ -94,17 +94,27 @@ async fn cost_csv_endpoint_returns_200() {
 
     let (alert_tx, _) = tokio::sync::broadcast::channel(16);
     let app_state = llm_proxy::server::AppState {
-        router: Arc::new(llm_proxy::router::Router::new(
+        router: llm_proxy::router::RouterHandle::new(Arc::new(llm_proxy::router::Router::new(
             std::collections::HashMap::new(),
             std::collections::HashMap::new(),
             Arc::new(llm_proxy::router::BadKeyRegistry::new()),
-        )),
+        ))),
         db: pool.clone(),
         config,
         cache: llm_proxy::cache::PromptCache::new(0),
         alert_tx,
         error_burst_counters: Arc::new(dashmap::DashMap::new()),
         alert_snapshot: Arc::new(Mutex::new(VecDeque::new())),
+        metrics: Arc::new(llm_proxy::metrics::Metrics::default()),
+        circuit_breaker: Arc::new(llm_proxy::circuit_breaker::CircuitBreaker::with_defaults()),
+        concurrency: Arc::new(llm_proxy::concurrency::ConcurrencyLimiter::new(50, 500)),
+        fallback_config: Arc::new(llm_proxy::fallback::FallbackConfig::default()),
+        auth_store: None,
+        pipeline: None,
+        rbac_state: None,
+        quota_tracker: None,
+        config_store: None,
+        budget_manager: None,
     };
 
     let app = Router::new()

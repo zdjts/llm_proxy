@@ -85,7 +85,7 @@ impl Provider for AnthropicProvider {
                     msg: format!("upstream {s}"),
                 });
             }
-            let body = Box::pin(resp.bytes_stream().map(|item| match item {
+            let raw_stream = Box::pin(resp.bytes_stream().map(|item| match item {
                 Ok(b) => Ok(b),
                 Err(e) => Err(AppError::Upstream {
                     status: None,
@@ -94,6 +94,7 @@ impl Provider for AnthropicProvider {
                     msg: format!("stream error: {e}"),
                 }),
             }));
+            let body = super::anthropic_stream::relay_anthropic_stream(raw_stream, &req.model);
             return Ok(ProviderResponse::Stream { body });
         }
         let an_req = openai_to_anthropic(&req);

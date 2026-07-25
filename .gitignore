@@ -12,3 +12,10 @@ config.yaml
 data/
 test-gateway.sh
 docs/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# JJ
+/.jj/

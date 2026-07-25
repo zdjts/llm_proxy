@@ -1,0 +1,36 @@
+[flow]
+start_node = "planner"
+max_steps = 200
+agent_retries = 2
+route_retries = 2
+snapshot = ".orc/flow_snapshot.json"
+logs = ".orc/logs"
+
+# 模型默认读取 ORC_API_KEY；也可用 ORC_BASE_URL / ORC_MODEL 覆盖默认值。
+[model]
+base_url = "http://127.0.0.1:4000/v1"
+model = "gpt-5.6-luna"
+timeout_secs = 120
+retry_attempts = 2
+context_limit = 12000
+
+[[agents]]
+name = "planner"
+tool = "pi"
+prompt = "prompts/planner.md"
+args = ["--mode", "json"]
+timeout_secs = 900
+
+[[agents]]
+name = "coder"
+tool = "pi"
+prompt = "prompts/coder.md"
+args = ["--mode", "json"]
+timeout_secs = 900
+
+[[agents]]
+name = "reviewer"
+tool = "pi"
+prompt = "prompts/reviewer.md"
+args = ["--mode", "json"]
+timeout_secs = 900

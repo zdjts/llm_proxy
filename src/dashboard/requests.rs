@@ -1,20 +1,17 @@
-//! Request detail screen — ADR-007 §9 (T16) + ADR-012 §2,§5 (T47,T50).
+//! Request detail screen — ADR-007 §9 (T16) + ADR-012 §2,§5.
 //!
-//! Lists `request_log` rows with filter controls.  Supports `?tenant=` and
-//! `?format=csv`.  SQL is fully parameterised; results capped at 100 rows.
+//! Lists `request_log` rows with filter controls. JSON + CSV only.
 
-use askama::Template;
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::header;
 use axum::response::IntoResponse;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 use crate::error::AppError;
 
-use super::layout::BaseTemplate;
-
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Serialize, Default, Clone)]
 pub struct RequestFilter {
     pub tenant: Option<String>,
     pub format: Option<String>,
@@ -28,83 +25,30 @@ pub struct RequestFilter {
     pub offset: Option<i64>,
 }
 
-#[derive(Template)]
-#[template(
-    source = r#"<h2>请求明细</h2>
-<form method="get" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
-    <select name="tenant" onchange="this.form.submit()">
-        <option value="">全部 tenant</option>
-        {% for t in tenants %}
-        <option value="{{ t }}" {% if filter.tenant.as_deref() == Some(t.as_str()) %}selected{% endif %}>{{ t }}</option>
-        {% endfor %}
-    </select>
-    <input name="model" placeholder="model" value="{{ filter.model.clone().unwrap_or_default() }}" style="width:120px">
-    <input name="pool_id" placeholder="pool_id" value="{{ filter.pool_id.clone().unwrap_or_default() }}" style="width:100px">
-    <input name="finish_reason" placeholder="finish_reason" value="{{ filter.finish_reason.clone().unwrap_or_default() }}" style="width:100px">
-    <input name="error_code" placeholder="error_code" value="{{ filter.error_code.clone().unwrap_or_default() }}" style="width:100px">
-    <label><input type="checkbox" name="has_stream" value="1" {% if filter.has_stream == Some(1) %}checked{% endif %}> 流式</label>
-    <label>重试≥<input name="min_retry" type="number" value="{{ filter.min_retry.unwrap_or(0) }}" min="0" style="width:50px"></label>
-    <label>时间窗口<input name="hours" type="number" value="{{ filter.hours.unwrap_or(24) }}" min="1" max="720" style="width:50px">h</label>
-    <button type="submit">筛选</button>
-    <a class="btn" href="?format=csv&amp;tenant={{ filter.tenant.clone().unwrap_or_default() }}&amp;model={{ filter.model.clone().unwrap_or_default() }}&amp;pool_id={{ filter.pool_id.clone().unwrap_or_default() }}&amp;hours={{ filter.hours.unwrap_or(24) }}" style="padding:4px 8px;border:1px solid var(--brd);border-radius:4px;text-decoration:none;color:var(--fg);font-size:13px">CSV</a>
-</form>
-<table>
-<thead><tr>
-    <th>时间</th><th>Model</th><th>Pool</th><th>key_hash</th>
-    <th>状态</th><th>prompt</th><th>completion</th>
-    <th>cache</th><th>完成原因</th><th>错误码</th>
-    <th>延迟</th><th>TTFT</th><th>重试</th>
-</tr></thead>
-<tbody>
-{% for r in rows %}
-<tr>
-    <td class="muted">{{ r.ts_display }}</td>
-    <td>{{ r.model }}</td>
-    <td>{{ r.pool_id }}</td>
-    <td class="muted" style="font-family:monospace;font-size:11px">{{ r.key_hash }}</td>
-    <td>{{ r.status_code }}</td>
-    <td class="num">{{ r.prompt_tokens }}</td>
-    <td class="num">{{ r.completion_tokens }}</td>
-    <td class="num">{{ r.cached_tokens }}</td>
-    <td>{{ r.finish_reason.clone().unwrap_or_default() }}</td>
-    <td class="err">{{ r.error_code.clone().unwrap_or_default() }}</td>
-    <td class="num">{{ r.latency_ms }}ms</td>
-    <td class="num">{{ r.ttft_ms.clone().unwrap_or_default() }}</td>
-    <td class="num">{{ r.retry_count }}</td>
-</tr>
-{% endfor %}
-{% if rows.is_empty() %}
-<tr><td colspan="13" class="muted">— 无匹配记录 —</td></tr>
-{% endif %}
-</tbody>
-</table>
-<small class="muted">最近 {{ filter.hours.unwrap_or(24) }}h · 最多 100 条</small>
-"#,
-    ext = "html"
-)]
-struct RequestsTemplate {
-    rows: Vec<RequestRow>,
-    filter: RequestFilter,
-    tenants: Vec<String>,
+#[derive(Serialize)]
+pub struct RequestsResponse {
+    pub rows: Vec<RequestRow>,
+    pub filter: RequestFilter,
+    pub tenants: Vec<String>,
 }
 
-struct RequestRow {
-    ts_display: String,
-    model: String,
-    pool_id: String,
-    key_hash: String,
-    status_code: String,
-    prompt_tokens: String,
-    completion_tokens: String,
-    cached_tokens: String,
-    finish_reason: Option<String>,
-    error_code: Option<String>,
-    latency_ms: i64,
-    ttft_ms: Option<String>,
-    retry_count: i32,
+#[derive(Serialize)]
+pub struct RequestRow {
+    pub ts: i64,
+    pub model: String,
+    pub pool_id: String,
+    pub key_hash: String,
+    pub status_code: String,
+    pub prompt_tokens: String,
+    pub completion_tokens: String,
+    pub cached_tokens: String,
+    pub finish_reason: Option<String>,
+    pub error_code: Option<String>,
+    pub latency_ms: i64,
+    pub ttft_ms: Option<String>,
+    pub retry_count: i32,
 }
 
-/// `GET /admin/requests` — request list with filters.
 pub async fn request_list_handler(
     State(state): State<crate::server::AppState>,
     Query(filter): Query<RequestFilter>,
@@ -117,33 +61,42 @@ pub async fn request_list_handler(
             "time,model,pool,key_hash,status,prompt,completion,cache,finish_reason,error_code,latency_ms,ttft_ms,retry\n",
         );
         for r in &rows {
-            out.push_str(&super::csv::csv_quote(&r.ts_display));
+            let ts_display = if r.ts > 0 {
+                let secs = r.ts / 1000;
+                let h = (secs / 3600) % 24;
+                let m = (secs / 60) % 60;
+                let s = secs % 60;
+                format!("{h:02}:{m:02}:{s:02}")
+            } else {
+                "-".into()
+            };
+            out.push_str(&crate::dashboard::csv::csv_quote(&ts_display));
             out.push(',');
-            out.push_str(&super::csv::csv_quote(&r.model));
+            out.push_str(&crate::dashboard::csv::csv_quote(&r.model));
             out.push(',');
-            out.push_str(&super::csv::csv_quote(&r.pool_id));
+            out.push_str(&crate::dashboard::csv::csv_quote(&r.pool_id));
             out.push(',');
-            out.push_str(&super::csv::csv_quote(&r.key_hash));
+            out.push_str(&crate::dashboard::csv::csv_quote(&r.key_hash));
             out.push(',');
-            out.push_str(&super::csv::csv_quote(&r.status_code));
+            out.push_str(&crate::dashboard::csv::csv_quote(&r.status_code));
             out.push(',');
-            out.push_str(&super::csv::csv_quote(&r.prompt_tokens));
+            out.push_str(&crate::dashboard::csv::csv_quote(&r.prompt_tokens));
             out.push(',');
-            out.push_str(&super::csv::csv_quote(&r.completion_tokens));
+            out.push_str(&crate::dashboard::csv::csv_quote(&r.completion_tokens));
             out.push(',');
-            out.push_str(&super::csv::csv_quote(&r.cached_tokens));
+            out.push_str(&crate::dashboard::csv::csv_quote(&r.cached_tokens));
             out.push(',');
-            out.push_str(&super::csv::csv_quote(
+            out.push_str(&crate::dashboard::csv::csv_quote(
                 &r.finish_reason.clone().unwrap_or_default(),
             ));
             out.push(',');
-            out.push_str(&super::csv::csv_quote(
+            out.push_str(&crate::dashboard::csv::csv_quote(
                 &r.error_code.clone().unwrap_or_default(),
             ));
             out.push(',');
             out.push_str(&r.latency_ms.to_string());
             out.push(',');
-            out.push_str(&super::csv::csv_quote(
+            out.push_str(&crate::dashboard::csv::csv_quote(
                 &r.ttft_ms.clone().unwrap_or_default(),
             ));
             out.push(',');
@@ -163,25 +116,12 @@ pub async fn request_list_handler(
             .into_response());
     }
 
-    let rendered = RequestsTemplate {
+    Ok(Json(RequestsResponse {
         rows,
         filter,
         tenants,
-    }
-    .render()
-    .map_err(|e| AppError::Internal(format!("template: {e}")))?;
-    let page = BaseTemplate {
-        content: rendered,
-        is_active_cost: false,
-        is_active_requests: true,
-        is_active_keys: false,
-        is_active_traffic: false,
-        is_active_alerts: false,
-        is_active_help: false,
-    }
-    .render()
-    .map_err(|e| AppError::Internal(format!("template: {e}")))?;
-    Ok(axum::response::Html(page).into_response())
+    })
+    .into_response())
 }
 
 async fn query_tenant_list(pool: &SqlitePool) -> Result<Vec<String>, AppError> {
@@ -250,34 +190,23 @@ async fn query_requests(pool: &SqlitePool, f: &RequestFilter) -> Result<Vec<Requ
 
     let result: Vec<RequestRow> = rows
         .into_iter()
-        .map(|r| {
-            let ts_display = if r.ts > 0 {
-                let secs = r.ts / 1000;
-                let h = (secs / 3600) % 24;
-                let m = (secs / 60) % 60;
-                format!("{:02}:{:02}", h, m)
-            } else {
-                "-".into()
-            };
-
-            RequestRow {
-                ts_display,
-                model: r.model,
-                pool_id: r.pool_id,
-                key_hash: r.key_hash,
-                status_code: r.status_code.map(|s| s.to_string()).unwrap_or_default(),
-                prompt_tokens: r.prompt_tokens.map(|t| t.to_string()).unwrap_or_default(),
-                completion_tokens: r
-                    .completion_tokens
-                    .map(|t| t.to_string())
-                    .unwrap_or_default(),
-                cached_tokens: r.cached_tokens.map(|t| t.to_string()).unwrap_or_default(),
-                finish_reason: r.finish_reason,
-                error_code: r.error_code,
-                latency_ms: r.latency_ms.unwrap_or(0),
-                ttft_ms: r.ttft_ms.map(|t| format!("{t}ms")),
-                retry_count: r.retry_count.unwrap_or(0),
-            }
+        .map(|r| RequestRow {
+            ts: r.ts,
+            model: r.model,
+            pool_id: r.pool_id,
+            key_hash: r.key_hash,
+            status_code: r.status_code.map(|s| s.to_string()).unwrap_or_default(),
+            prompt_tokens: r.prompt_tokens.map(|t| t.to_string()).unwrap_or_default(),
+            completion_tokens: r
+                .completion_tokens
+                .map(|t| t.to_string())
+                .unwrap_or_default(),
+            cached_tokens: r.cached_tokens.map(|t| t.to_string()).unwrap_or_default(),
+            finish_reason: r.finish_reason,
+            error_code: r.error_code,
+            latency_ms: r.latency_ms.unwrap_or(0),
+            ttft_ms: r.ttft_ms.map(|t| format!("{t}ms")),
+            retry_count: r.retry_count.unwrap_or(0),
         })
         .collect();
 

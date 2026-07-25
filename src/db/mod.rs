@@ -60,6 +60,8 @@ pub struct RequestLog {
     pub error: Option<String>,
     pub audit: AuditDetail,
     pub error_code: Option<String>,
+    pub user_agent: Option<String>,
+    pub cost_usd: Option<f64>,
 }
 
 /// Insert a log entry into the database. Async — caller must not block on the
@@ -78,8 +80,8 @@ pub async fn log_request(pool: &SqlitePool, log: &RequestLog) -> Result<(), AppE
           cached_tokens, cache_creation_tokens, cache_source, \
           reasoning_tokens, audio_tokens, \
           ttft_ms, upstream_model, system_fingerprint, finish_reason, \
-          error_code, retry_count, tenant_id) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26)",
+          error_code, retry_count, tenant_id, user_agent, cost_usd) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28)",
     )
     .bind(&log.id)
     .bind(log.ts)
@@ -107,6 +109,8 @@ pub async fn log_request(pool: &SqlitePool, log: &RequestLog) -> Result<(), AppE
     .bind(&log.error_code)
     .bind(log.audit.from_router.retry_count)
     .bind(&log.audit.from_auth.tenant_id)
+    .bind(&log.user_agent)
+    .bind(log.cost_usd)
     .execute(pool)
     .await
     .map_err(|e| AppError::Internal(format!("Failed to log request: {e}")))?;
@@ -172,6 +176,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn audit_hourly_dimensions_are_non_null_and_include_cost_fields() {
+        let (pool, _dir) = setup_test_pool().await;
+
+        let columns = sqlx::query("PRAGMA table_info(audit_hourly)")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        let column_names: Vec<String> = columns.iter().map(|row| row.get("name")).collect();
+        assert!(column_names.contains(&"upstream_model".to_string()));
+        assert!(column_names.contains(&"cost_usd".to_string()));
+
+        let cache_source_not_null: i64 = columns
+            .iter()
+            .find(|row| row.get::<String, _>("name") == "cache_source")
+            .map(|row| row.get("notnull"))
+            .unwrap();
+        assert_eq!(cache_source_not_null, 1);
+
+        let indexes = sqlx::query("PRAGMA index_list(audit_hourly)")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert!(indexes.iter().any(|row| {
+            let name: String = row.get("name");
+            let unique: i64 = row.get("unique");
+            unique == 1 && name.starts_with("sqlite_autoindex_audit_hourly")
+        }));
+    }
+    #[tokio::test]
     async fn it_logs_a_request() {
         let (pool, _dir) = setup_test_pool().await;
 
@@ -193,6 +226,8 @@ mod tests {
             error: None,
             audit: AuditDetail::none(),
             error_code: None,
+            user_agent: None,
+            cost_usd: None,
         };
 
         log_request(&pool, &entry).await.unwrap();
@@ -239,6 +274,8 @@ mod tests {
             error: Some("something went wrong".into()),
             audit: AuditDetail::none(),
             error_code: None,
+            user_agent: None,
+            cost_usd: None,
         };
 
         log_request(&pool, &entry).await.unwrap();

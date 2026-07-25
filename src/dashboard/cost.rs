@@ -1,122 +1,58 @@
-//! Cost overview screen — ADR-007 §8 (T15) + ADR-012 §2,§5 (T47,T50).
+//! Cost overview — ADR-007 §8 (T15) + ADR-012 §2,§5 (T47,T50).
 //!
-//! Queries `audit_hourly`, applies cache-source discount factors, and renders
-//! per-model cost. Supports `?tenant=` filter and `?format=csv`.
+//! Queries `audit_hourly` for per-model cost summary.
+//! Supports `?tenant=` filter, `?format=csv`, `?format=json`.
 
-use std::collections::HashMap;
-
-use askama::Template;
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::header;
 use axum::response::IntoResponse;
 use serde::Deserialize;
+use serde::Serialize;
 use sqlx::SqlitePool;
 
 use crate::config::Config;
 use crate::error::AppError;
 
-use super::layout::BaseTemplate;
-
 #[derive(Deserialize, Default)]
 pub struct CostQuery {
     pub tenant: Option<String>,
     pub format: Option<String>,
+    pub hours: Option<i64>,
 }
 
-/// Per-model upstream pricing (USD per token).
-#[derive(Debug, Clone)]
-pub struct ModelPrice {
-    pub prompt: f64,
-    pub completion: f64,
+#[derive(Serialize)]
+pub struct CostRow {
+    pub model: String,
+    pub pool_id: String,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub cached_tokens: i64,
+    pub requests: i64,
+    pub errors: i64,
+    pub cost_usd: String,
 }
 
-fn cache_discount(source: &str) -> f64 {
-    match source {
-        "OpenAiPromptCache" => 0.5,
-        "DeepSeekPromptCache" => 0.1,
-        "AnthropicCacheControl" => 0.1,
-        "GeminiCachedContent" => 0.25,
-        _ => 1.0,
-    }
+#[derive(Serialize)]
+pub struct CostStats {
+    pub total_requests: String,
+    pub total_cost: String,
+    pub avg_latency: String,
+    pub error_rate: String,
+    pub total_errors: i64,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub cached_tokens: i64,
 }
 
-#[derive(Template)]
-#[template(
-    source = r#"<h2>成本总览</h2>
-<form method="get" style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
-    <select name="tenant" onchange="this.form.submit()">
-        <option value="">全部 tenant</option>
-        {% for t in tenants %}
-        <option value="{{ t }}" {% if selected_tenant.as_deref() == Some(t.as_str()) %}selected{% endif %}>{{ t }}</option>
-        {% endfor %}
-    </select>
-    <noscript><button type="submit">筛选</button></noscript>
-</form>
-<div class="stat-grid">
-    <div class="stat"><div class="stat-num">{{ stats.total_requests }}</div><div class="stat-label">24h 请求</div></div>
-    <div class="stat"><div class="stat-num">{{ stats.total_cost }}</div><div class="stat-label">估算成本 (USD)</div></div>
-    <div class="stat"><div class="stat-num">{{ stats.avg_latency }}</div><div class="stat-label">平均延迟</div></div>
-    <div class="stat"><div class="stat-num">{{ stats.error_rate }}</div><div class="stat-label">错误率</div></div>
-</div>
-<p class="muted">基于 audit_hourly 聚合 24h，cache 折价系数见 ADR-007 §8</p>
-<table>
-<thead><tr>
-    <th>Model</th><th>Pool</th>
-    <th class="num">总 Token</th><th class="num">缓存命中</th>
-    <th class="num">计费 Prompt</th><th class="num">请求数</th><th class="num">错误数</th>
-    <th class="num">估算成本 (USD)</th>
-    <th></th>
-</tr></thead>
-<tbody>
-{% for row in rows %}
-<tr>
-    <td>{{ row.model }}</td>
-    <td>{{ row.pool_id }}</td>
-    <td class="num">{{ row.total_tokens }}</td>
-    <td class="num">{{ row.cached_tokens }}</td>
-    <td class="num">{{ row.billable_prompt }}</td>
-    <td class="num">{{ row.requests }}</td>
-    <td class="num">{{ row.errors }}</td>
-    <td class="num">{{ row.cost_usd }}</td>
-    <td><a href="/admin/cost/drilldown?model={{ row.model }}{% if selected_tenant.is_some() %}&amp;tenant={{ selected_tenant.as_ref().unwrap() }}{% endif %}">→</a></td>
-</tr>
-{% endfor %}
-{% if rows.is_empty() %}
-<tr><td colspan="8" class="muted">— 暂无聚合数据（等待首次整点聚合）—</td></tr>
-{% endif %}
-</tbody>
-</table>
-<small class="muted">成本 = (billable_prompt * prompt_price) + (completion_tokens * completion_price)；
-缓存命中按 cache_source 折价系数折算。未配置 pricing 的 model 显示 ?</small>
-"#,
-    ext = "html"
-)]
-struct CostTemplate {
-    rows: Vec<CostRow>,
-    tenants: Vec<String>,
-    selected_tenant: Option<String>,
-    stats: CostStats,
+#[derive(Serialize)]
+pub struct CostResponse {
+    pub rows: Vec<CostRow>,
+    pub tenants: Vec<String>,
+    pub selected_tenant: Option<String>,
+    pub stats: CostStats,
 }
 
-struct CostStats {
-    total_requests: String,
-    total_cost: String,
-    avg_latency: String,
-    error_rate: String,
-}
-
-struct CostRow {
-    model: String,
-    pool_id: String,
-    total_tokens: i64,
-    cached_tokens: i64,
-    billable_prompt: i64,
-    requests: i64,
-    errors: i64,
-    cost_usd: String,
-}
-
-/// `GET /admin` — cost overview page.
 pub async fn cost_overview_handler(
     State(state): State<crate::server::AppState>,
     Query(q): Query<CostQuery>,
@@ -127,24 +63,24 @@ pub async fn cost_overview_handler(
 
     if q.format.as_deref() == Some("csv") {
         let mut out = String::from(
-            "model,pool,total_tokens,cached_tokens,billable_prompt,requests,errors,cost_usd\n",
+            "model,pool,prompt_tokens,completion_tokens,cached_tokens,requests,errors,cost_usd\n",
         );
         for r in &rows {
-            out.push_str(&super::csv::csv_quote(&r.model));
+            out.push_str(&crate::dashboard::csv::csv_quote(&r.model));
             out.push(',');
-            out.push_str(&super::csv::csv_quote(&r.pool_id));
+            out.push_str(&crate::dashboard::csv::csv_quote(&r.pool_id));
             out.push(',');
-            out.push_str(&r.total_tokens.to_string());
+            out.push_str(&r.prompt_tokens.to_string());
+            out.push(',');
+            out.push_str(&r.completion_tokens.to_string());
             out.push(',');
             out.push_str(&r.cached_tokens.to_string());
-            out.push(',');
-            out.push_str(&r.billable_prompt.to_string());
             out.push(',');
             out.push_str(&r.requests.to_string());
             out.push(',');
             out.push_str(&r.errors.to_string());
             out.push(',');
-            out.push_str(&super::csv::csv_quote(&r.cost_usd));
+            out.push_str(&crate::dashboard::csv::csv_quote(&r.cost_usd));
             out.push('\n');
         }
         return Ok((
@@ -160,26 +96,13 @@ pub async fn cost_overview_handler(
             .into_response());
     }
 
-    let rendered = CostTemplate {
+    Ok(Json(CostResponse {
         rows,
         tenants,
         selected_tenant: q.tenant,
         stats,
-    }
-    .render()
-    .map_err(|e| AppError::Internal(format!("template render: {e}")))?;
-    let page = BaseTemplate {
-        content: rendered,
-        is_active_cost: true,
-        is_active_requests: false,
-        is_active_keys: false,
-        is_active_traffic: false,
-        is_active_alerts: false,
-        is_active_help: false,
-    }
-    .render()
-    .map_err(|e| AppError::Internal(format!("template render: {e}")))?;
-    Ok(axum::response::Html(page).into_response())
+    })
+    .into_response())
 }
 
 async fn query_tenant_list(pool: &SqlitePool) -> Result<Vec<String>, AppError> {
@@ -200,21 +123,21 @@ async fn query_cost(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
-    let window_start = (now / 3600 - 24) * 3600;
+    let hours = q.hours.unwrap_or(24).clamp(1, 24 * 365);
+    let window_start = (now / 3600 - hours) * 3600;
     let window_end = (now / 3600 + 1) * 3600;
 
     let rows = sqlx::query_as::<_, HourlyRow>(
-        "SELECT model, pool_id, cache_source, \
+        "SELECT model, pool_id, \
                 SUM(request_count) AS requests, \
                 SUM(success_count) AS success, \
                 SUM(prompt_tokens) AS prompt_tokens, \
                 SUM(completion_tokens) AS completion_tokens, \
-                SUM(total_tokens) AS total_tokens, \
                 SUM(cached_tokens) AS cached_tokens \
          FROM audit_hourly \
          WHERE hour >= ?1 AND hour < ?2 \
            AND (?3 IS NULL OR tenant_id = ?3) \
-         GROUP BY model, pool_id, cache_source",
+         GROUP BY model, pool_id",
     )
     .bind(window_start)
     .bind(window_end)
@@ -223,44 +146,32 @@ async fn query_cost(
     .await
     .map_err(|e| AppError::Internal(format!("cost query: {e}")))?;
 
-    let mut grouped: HashMap<(String, String), CostRow> = HashMap::new();
+    let mut result: Vec<CostRow> = rows
+        .into_iter()
+        .map(|r| {
+            let price = config.pricing.lookup(&r.model, q.tenant.as_deref());
+            let prompt_price = price.prompt / 1_000_000.0;
+            let completion_price = price.completion / 1_000_000.0;
+            let cost = if prompt_price > 0.0 || completion_price > 0.0 {
+                let c = r.prompt_tokens as f64 * prompt_price
+                    + r.completion_tokens as f64 * completion_price;
+                format!("${c:.6}")
+            } else {
+                "?".into()
+            };
+            CostRow {
+                model: r.model,
+                pool_id: r.pool_id,
+                prompt_tokens: r.prompt_tokens,
+                completion_tokens: r.completion_tokens,
+                cached_tokens: r.cached_tokens,
+                requests: r.requests,
+                errors: r.requests - r.success,
+                cost_usd: cost,
+            }
+        })
+        .collect();
 
-    for r in rows {
-        let entry = grouped
-            .entry((r.model.clone(), r.pool_id.clone()))
-            .or_insert_with(|| CostRow {
-                model: r.model.clone(),
-                pool_id: r.pool_id.clone(),
-                total_tokens: 0,
-                cached_tokens: 0,
-                billable_prompt: 0,
-                requests: 0,
-                errors: 0,
-                cost_usd: "?".into(),
-            });
-
-        entry.total_tokens += r.total_tokens;
-        entry.cached_tokens += r.cached_tokens;
-        entry.requests += r.requests;
-
-        let cs = r.cache_source.as_deref().unwrap_or("None");
-        let discount = cache_discount(cs);
-        entry.billable_prompt +=
-            ((r.prompt_tokens - r.cached_tokens) as f64 + r.cached_tokens as f64 * discount) as i64;
-        entry.errors += r.requests - r.success;
-    }
-
-    for row in grouped.values_mut() {
-        let price = config.pricing.lookup(&row.model, q.tenant.as_deref());
-        let prompt_price = price.prompt;
-        let completion_price = price.completion;
-        if prompt_price > 0.0 || completion_price > 0.0 {
-            let cost = row.billable_prompt as f64 * prompt_price;
-            row.cost_usd = format!("${cost:.6}");
-        }
-    }
-
-    let mut result: Vec<CostRow> = grouped.into_values().collect();
     result.sort_by(|a, b| a.model.cmp(&b.model));
     Ok(result)
 }
@@ -270,13 +181,11 @@ async fn query_cost(
 struct HourlyRow {
     model: String,
     pool_id: String,
-    cache_source: Option<String>,
     requests: i64,
     #[sqlx(rename = "success")]
     success: i64,
     prompt_tokens: i64,
     completion_tokens: i64,
-    total_tokens: i64,
     cached_tokens: i64,
 }
 
@@ -289,9 +198,8 @@ async fn query_cost_stats(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
-    let window_start = (now / 3600 - 24) * 3600;
+    let window_start = (now / 3600 - q.hours.unwrap_or(24).clamp(1, 24 * 365)) * 3600;
     let window_end = (now / 3600 + 1) * 3600;
-
     #[derive(sqlx::FromRow)]
     struct StatRow {
         requests: i64,
@@ -315,6 +223,7 @@ async fn query_cost_stats(
     .map_err(|e| AppError::Internal(format!("stats query: {e}")))?;
 
     let total_requests = row.requests;
+    let total_errors = total_requests - row.success;
     let avg_latency = if total_requests > 0 {
         format!("{}ms", row.latency_ms_sum / total_requests)
     } else {
@@ -333,13 +242,10 @@ async fn query_cost_stats(
     } else {
         let sum: f64 = rows
             .iter()
-            .filter_map(|r| {
+            .map(|r| {
                 let price = config.pricing.lookup(&r.model, q.tenant.as_deref());
-                if price.prompt > 0.0 {
-                    Some(r.billable_prompt as f64 * price.prompt)
-                } else {
-                    None
-                }
+                r.prompt_tokens as f64 * price.prompt / 1_000_000.0
+                    + r.completion_tokens as f64 * price.completion / 1_000_000.0
             })
             .sum();
         if sum > 0.0 {
@@ -354,5 +260,9 @@ async fn query_cost_stats(
         total_cost,
         avg_latency,
         error_rate,
+        total_errors,
+        prompt_tokens: rows.iter().map(|r| r.prompt_tokens).sum(),
+        completion_tokens: rows.iter().map(|r| r.completion_tokens).sum(),
+        cached_tokens: rows.iter().map(|r| r.cached_tokens).sum(),
     })
 }

@@ -5,6 +5,8 @@
 //! format. Successful requests get an [`AuthedClient`] injected via axum
 //! [`Extension`] for downstream handlers to consume.
 
+pub mod acl;
+
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::Request;
@@ -80,7 +82,7 @@ pub async fn require_auth(
 mod tests {
     use super::*;
     use axum::Router;
-    use axum::body::Body;
+
     use axum::http::StatusCode;
     use axum::routing::get;
     use tower::util::ServiceExt;

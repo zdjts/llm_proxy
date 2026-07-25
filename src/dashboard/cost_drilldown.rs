@@ -1,260 +1,221 @@
-//! Per-model per-tenant cost drilldown screen — ADR-014 §4 (T61).
+//! Cost drilldown screen — ADR-014 §3 (T63).
 //!
-//! `GET /admin/cost/drilldown?model=<m>&tenant=<t>`
-//! Renders 3 SVG trend lines + 3 summary stat cards.
+//! JSON-only endpoint. 72h hourly breakdown per model/tenant.
 
-use askama::Template;
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::response::IntoResponse;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 
 use crate::error::AppError;
-
-use super::layout::BaseTemplate;
 
 #[derive(Deserialize)]
 pub struct DrilldownQuery {
     pub model: String,
     pub tenant: Option<String>,
+    pub format: Option<String>,
 }
 
-#[derive(Template)]
-#[template(
-    source = r#"<h2>{{ model }} — 成本下钻</h2>
-<p class="muted">
-    {% if tenant.is_some() %}Tenant: {{ tenant.as_ref().unwrap() }} · {% endif %}
-    <a href="/admin">← 返回成本总览</a>
-</p>
-
-<div style="display:flex;gap:16px;margin-bottom:16px">
-    <div class="card" style="flex:1;text-align:center">
-        <div class="muted" style="font-size:12px">估算成本 (USD)</div>
-        <div style="font-size:24px;font-weight:700">{{ stats.cost }}</div>
-    </div>
-    <div class="card" style="flex:1;text-align:center">
-        <div class="muted" style="font-size:12px">缓存命中率</div>
-        <div style="font-size:24px;font-weight:700">{{ stats.hit_rate }}</div>
-    </div>
-    <div class="card" style="flex:1;text-align:center">
-        <div class="muted" style="font-size:12px">平均延迟</div>
-        <div style="font-size:24px;font-weight:700">{{ stats.avg_latency }}</div>
-    </div>
-</div>
-
-<svg width="100%" height="260" viewBox="0 0 {{ w }} 260" style="background:var(--card);border:1px solid var(--brd);border-radius:4px">
-    <line x1="50" y1="220" x2="{{ w }}" y2="220" stroke="var(--brd)" stroke-width="1"/>
-    <line x1="50" y1="30" x2="50" y2="220" stroke="var(--brd)" stroke-width="1"/>
-    {% for line in chart.lines %}<polyline points="{{ line.points }}" fill="none" stroke="{{ line.color }}" stroke-width="2"/>{% endfor %}
-    {% for label in chart.labels %}<text x="{{ label.x }}" y="236" fill="var(--muted)" font-size="9" text-anchor="end" transform="rotate(-30,{{ label.x }},236)">{{ label.text }}</text>{% endfor %}
-</svg>
-<small class="muted">蓝=请求量 · 红=折后Prompt Tokens · 绿=完成Tokens</small>
-"#,
-    ext = "html"
-)]
-struct DrilldownTemplate {
-    model: String,
-    tenant: Option<String>,
-    chart: ChartData,
-    stats: DrilldownStats,
-    w: i64,
+#[derive(Serialize)]
+pub struct DrilldownResponse {
+    pub model: String,
+    pub tenant: Option<String>,
+    pub stats: DrilldownStats,
+    pub chart: super::traffic::ChartData,
 }
 
-struct ChartData {
-    lines: Vec<LineData>,
-    labels: Vec<LabelData>,
+#[derive(Serialize)]
+pub struct DrilldownStats {
+    pub cost: String,
+    pub hit_rate: String,
+    pub avg_latency: String,
 }
 
-struct LineData {
-    points: String,
-    color: String,
+fn cache_discount(source: &str) -> f64 {
+    match source {
+        "OpenAiPromptCache" => 0.5,
+        "DeepSeekPromptCache" => 0.1,
+        "AnthropicCacheControl" => 0.1,
+        "GeminiCachedContent" => 0.25,
+        _ => 1.0,
+    }
 }
 
-struct LabelData {
-    x: i64,
-    text: String,
-}
-
-struct DrilldownStats {
-    cost: String,
-    hit_rate: String,
-    avg_latency: String,
-}
-
-struct HourRow {
-    hour: i64,
-    rqs: i64,
-    pt: i64,
-    ct: i64,
-    cpt: i64,
-}
-
-/// `GET /admin/cost/drilldown?model=&tenant=`
 pub async fn cost_drilldown_handler(
     State(state): State<crate::server::AppState>,
     Query(q): Query<DrilldownQuery>,
-) -> Result<impl IntoResponse, AppError> {
-    if q.model.is_empty() {
-        return Err(AppError::BadRequest("model is required".into()));
-    }
+) -> Result<axum::response::Response, AppError> {
+    let pricing = state.config.pricing.clone();
+    let (stats, chart) = query_drilldown(&state.db, &pricing, &q.model, &q.tenant).await?;
 
-    let rows = query_model_hourly(&state.db, &q.model, &q.tenant).await?;
-    let stats = compute_stats(&state.config, &q.model, q.tenant.as_deref(), &rows);
-    let chart = build_chart(&rows);
-
-    let w = 50 + rows.len().max(12) as i64 * 14;
-
-    let rendered = DrilldownTemplate {
+    Ok(Json(DrilldownResponse {
         model: q.model,
         tenant: q.tenant,
-        chart,
         stats,
-        w,
-    }
-    .render()
-    .map_err(|e| AppError::Internal(format!("template: {e}")))?;
-
-    let page = BaseTemplate {
-        content: rendered,
-        is_active_cost: true,
-        is_active_requests: false,
-        is_active_keys: false,
-        is_active_traffic: false,
-        is_active_alerts: false,
-        is_active_help: false,
-    }
-    .render()
-    .map_err(|e| AppError::Internal(format!("template: {e}")))?;
-    Ok(axum::response::Html(page).into_response())
+        chart: super::traffic::ChartData {
+            lines: chart.lines,
+            labels: chart.labels,
+        },
+    })
+    .into_response())
 }
 
-async fn query_model_hourly(
+async fn query_drilldown(
     pool: &SqlitePool,
+    pricing: &crate::config::pricing::PricingConfig,
     model: &str,
     tenant: &Option<String>,
-) -> Result<Vec<HourRow>, AppError> {
+) -> Result<(DrilldownStats, super::traffic::ChartData), AppError> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
-    let start = (now / 3600 - 72) * 3600;
+    let window_start = (now / 3600 - 72) * 3600;
+    let window_end = (now / 3600 + 1) * 3600;
 
-    let rows: Vec<(i64, i64, i64, i64, i64)> = sqlx::query_as(
-        "SELECT hour, \
-                SUM(request_count) AS rqs, \
-                SUM(prompt_tokens) AS pt, \
-                SUM(cached_tokens) AS ct, \
-                SUM(completion_tokens) AS cpt \
+    #[derive(sqlx::FromRow)]
+    struct HourRow {
+        hour: i64,
+        requests: i64,
+        success: i64,
+        prompt_tokens: i64,
+        completion_tokens: i64,
+        cached_tokens: i64,
+        latency_ms_sum: i64,
+        cache_source: Option<String>,
+    }
+
+    let rows: Vec<HourRow> = sqlx::query_as(
+        "SELECT hour, SUM(request_count) AS requests, SUM(success_count) AS success, \
+                SUM(prompt_tokens) AS prompt_tokens, SUM(completion_tokens) AS completion_tokens, \
+                SUM(cached_tokens) AS cached_tokens, SUM(latency_ms_sum) AS latency_ms_sum, \
+                cache_source \
          FROM audit_hourly \
-         WHERE hour >= ?1 \
-           AND model = ?2 \
-           AND (?3 IS NULL OR tenant_id = ?3) \
-         GROUP BY hour \
+         WHERE model = ?1 AND hour >= ?2 AND hour < ?3 \
+           AND (?4 IS NULL OR tenant_id = ?4) \
+         GROUP BY hour, cache_source \
          ORDER BY hour",
     )
-    .bind(start)
     .bind(model)
+    .bind(window_start)
+    .bind(window_end)
     .bind(tenant)
     .fetch_all(pool)
     .await
     .map_err(|e| AppError::Internal(format!("drilldown query: {e}")))?;
 
-    Ok(rows
-        .into_iter()
-        .map(|(hour, rqs, pt, ct, cpt)| HourRow {
-            hour,
-            rqs,
-            pt,
-            ct,
-            cpt,
-        })
-        .collect())
-}
+    let mut hourly: HashMap<i64, (i64, i64, i64, i64, i64, i64)> = HashMap::new();
+    for r in &rows {
+        let e = hourly.entry(r.hour).or_default();
+        let cs = r.cache_source.as_deref().unwrap_or("None");
+        let discount = cache_discount(cs);
+        let billable_prompt =
+            (r.prompt_tokens - r.cached_tokens) + (r.cached_tokens as f64 * discount) as i64;
+        e.0 += r.requests;
+        e.1 += r.success;
+        e.2 += billable_prompt;
+        e.3 += r.completion_tokens;
+        e.4 += r.cached_tokens;
+        e.5 += r.latency_ms_sum;
+    }
 
-fn compute_stats(
-    config: &crate::config::Config,
-    model: &str,
-    tenant: Option<&str>,
-    rows: &[HourRow],
-) -> DrilldownStats {
-    let price = config.pricing.lookup(model, tenant);
-    let total_pt: i64 = rows.iter().map(|r| r.pt).sum();
-    let total_ct: i64 = rows.iter().map(|r| r.ct).sum();
+    let mut hours: Vec<i64> = hourly.keys().copied().collect();
+    hours.sort();
 
-    let cost = if price.prompt > 0.0 {
-        let billable = (total_pt - total_ct) as f64 + total_ct as f64 * 0.5;
-        format!("${:.6}", billable * price.prompt)
+    let total_requests: i64 = hourly.values().map(|v| v.0).sum();
+    let _total_success: i64 = hourly.values().map(|v| v.1).sum();
+    let total_billable_prompt: i64 = hourly.values().map(|v| v.2).sum();
+    let total_completion: i64 = hourly.values().map(|v| v.3).sum();
+    let total_cached: i64 = hourly.values().map(|v| v.4).sum();
+    let total_latency: i64 = hourly.values().map(|v| v.5).sum();
+
+    let price = pricing.lookup(model, tenant.as_deref());
+    let prompt_price = price.prompt;
+    let completion_price = price.completion;
+    let total_cost = if prompt_price > 0.0 || completion_price > 0.0 {
+        let cost = total_billable_prompt as f64 * prompt_price
+            + total_completion as f64 * completion_price;
+        format!("${cost:.6}")
     } else {
         "?".into()
     };
 
-    let hit_rate = if total_pt > 0 {
-        format!("{:.1}%", total_ct as f64 / total_pt as f64 * 100.0)
+    let total_prompt = total_billable_prompt + total_cached;
+    let hit_rate = if total_prompt > 0 {
+        format!("{:.1}%", total_cached as f64 / total_prompt as f64 * 100.0)
     } else {
         "—".into()
     };
 
-    let avg_latency = "—";
+    let avg_latency = if total_requests > 0 {
+        format!("{}ms", total_latency / total_requests)
+    } else {
+        "—".into()
+    };
 
-    DrilldownStats {
-        cost,
+    let stats = DrilldownStats {
+        cost: total_cost,
         hit_rate,
-        avg_latency: avg_latency.into(),
-    }
-}
+        avg_latency,
+    };
 
-fn build_chart(rows: &[HourRow]) -> ChartData {
-    if rows.is_empty() {
-        return ChartData {
-            lines: vec![],
-            labels: vec![],
-        };
-    }
+    // Build chart data
+    let max_rq = if !hourly.is_empty() {
+        hourly.values().map(|v| v.0).max().unwrap_or(1).max(1)
+    } else {
+        1
+    };
+    let max_tok = if !hourly.is_empty() {
+        hourly
+            .values()
+            .map(|v| v.2.max(v.3))
+            .max()
+            .unwrap_or(1)
+            .max(1)
+    } else {
+        1
+    };
 
-    let max_rqs = rows.iter().map(|r| r.rqs).max().unwrap_or(1).max(1);
-    let max_pt = rows.iter().map(|r| r.pt).max().unwrap_or(1).max(1);
-    let max_cpt = rows.iter().map(|r| r.cpt).max().unwrap_or(1).max(1);
-
-    let mut rqs_points = String::from("50,220");
-    let mut pt_points = String::from("50,220");
-    let mut cpt_points = String::from("50,220");
+    let mut rq_points = String::from("40,180");
+    let mut pr_points = String::from("40,180");
+    let mut cm_points = String::from("40,180");
     let mut labels = Vec::new();
 
-    for (i, r) in rows.iter().enumerate() {
-        let x = 50 + i as i64 * 14;
-        let rq_y = 220 - (r.rqs as f64 / max_rqs as f64 * 190.0) as i64;
-        let pt_y = 220 - (r.pt as f64 / max_pt as f64 * 190.0) as i64;
-        let cpt_y = 220 - (r.cpt as f64 / max_cpt as f64 * 190.0) as i64;
-
-        rqs_points.push_str(&format!(" {x},{rq_y}"));
-        pt_points.push_str(&format!(" {x},{pt_y}"));
-        cpt_points.push_str(&format!(" {x},{cpt_y}"));
-
-        if i % 6 == 0 {
-            let secs = r.hour;
-            let h = (secs / 3600) % 24;
-            labels.push(LabelData {
+    for (i, h) in hours.iter().enumerate() {
+        if let Some(v) = hourly.get(h) {
+            let x = 40 + (i as i64 * 10).max(3);
+            let rq_y = 180 - (v.0 as f64 / max_rq as f64 * 140.0) as i64;
+            let pr_y = 180 - (v.2 as f64 / max_tok as f64 * 140.0) as i64;
+            let cm_y = 180 - (v.3 as f64 / max_tok as f64 * 140.0) as i64;
+            rq_points.push_str(&format!(" {x},{rq_y}"));
+            pr_points.push_str(&format!(" {x},{pr_y}"));
+            cm_points.push_str(&format!(" {x},{cm_y}"));
+            labels.push(super::traffic::LabelData {
                 x,
-                text: format!("{h:02}h"),
+                text: format!("{:02}", (h / 3600) % 24),
             });
         }
     }
 
-    ChartData {
+    let chart = super::traffic::ChartData {
         lines: vec![
-            LineData {
-                points: rqs_points,
-                color: "#2563eb".into(),
+            super::traffic::LineData {
+                points: rq_points,
+                color: "#3b82f6".into(),
             },
-            LineData {
-                points: pt_points,
-                color: "#dc2626".into(),
+            super::traffic::LineData {
+                points: pr_points,
+                color: "#ef4444".into(),
             },
-            LineData {
-                points: cpt_points,
-                color: "#16a34a".into(),
+            super::traffic::LineData {
+                points: cm_points,
+                color: "#10b981".into(),
             },
         ],
         labels,
-    }
+    };
+
+    Ok((stats, chart))
 }

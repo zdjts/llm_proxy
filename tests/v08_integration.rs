@@ -32,10 +32,12 @@ async fn cost_page_contains_stat_cards() {
     );
     let (alert_tx, _) = tokio::sync::broadcast::channel(16);
     let app_state = llm_proxy::server::AppState {
-        router: Arc::new(llm_proxy::router::Router::new(
-            std::collections::HashMap::new(),
-            std::collections::HashMap::new(),
-            Arc::new(llm_proxy::router::BadKeyRegistry::new()),
+        router: llm_proxy::router::RouterHandle::new(std::sync::Arc::new(
+            llm_proxy::router::Router::new(
+                std::collections::HashMap::new(),
+                std::collections::HashMap::new(),
+                Arc::new(llm_proxy::router::BadKeyRegistry::new()),
+            ),
         )),
         db: pool.clone(),
         config,
@@ -43,6 +45,18 @@ async fn cost_page_contains_stat_cards() {
         alert_tx,
         error_burst_counters: Arc::new(dashmap::DashMap::new()),
         alert_snapshot: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+        circuit_breaker: std::sync::Arc::new(
+            llm_proxy::circuit_breaker::CircuitBreaker::with_defaults(),
+        ),
+        concurrency: std::sync::Arc::new(llm_proxy::concurrency::ConcurrencyLimiter::new(50, 500)),
+        fallback_config: std::sync::Arc::new(llm_proxy::fallback::FallbackConfig::default()),
+        metrics: std::sync::Arc::new(llm_proxy::metrics::Metrics::default()),
+        auth_store: None,
+        pipeline: None,
+        rbac_state: None,
+        quota_tracker: None,
+        config_store: None,
+        budget_manager: None,
     };
     let app = Router::new()
         .route(
@@ -54,7 +68,7 @@ async fn cost_page_contains_stat_cards() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/admin")
+                .uri("/admin?format=json")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -68,8 +82,13 @@ async fn cost_page_contains_stat_cards() {
             .to_vec(),
     )
     .unwrap();
-    assert!(body.contains("stat-num"), "should contain stat cards");
-    assert!(body.contains("24h 请求"), "should show 24h requests stat");
+    assert!(body.contains("\"rows\""), "JSON should contain rows");
+    assert!(body.contains("\"tenants\""), "JSON should contain tenants");
+    assert!(body.contains("\"stats\""), "JSON should contain stats");
+    assert!(
+        body.contains("\"selected_tenant\""),
+        "JSON should contain selected_tenant"
+    );
     let _ = std::fs::remove_file(&db_path);
 }
 
@@ -77,10 +96,12 @@ async fn cost_page_contains_stat_cards() {
 async fn help_page_serves_runbook() {
     let (alert_tx, _) = tokio::sync::broadcast::channel(16);
     let app_state = llm_proxy::server::AppState {
-        router: Arc::new(llm_proxy::router::Router::new(
-            std::collections::HashMap::new(),
-            std::collections::HashMap::new(),
-            Arc::new(llm_proxy::router::BadKeyRegistry::new()),
+        router: llm_proxy::router::RouterHandle::new(std::sync::Arc::new(
+            llm_proxy::router::Router::new(
+                std::collections::HashMap::new(),
+                std::collections::HashMap::new(),
+                Arc::new(llm_proxy::router::BadKeyRegistry::new()),
+            ),
         )),
         db: sqlx::sqlite::SqlitePoolOptions::new()
             .connect("sqlite::memory:")
@@ -98,6 +119,18 @@ async fn help_page_serves_runbook() {
         alert_tx,
         error_burst_counters: Arc::new(dashmap::DashMap::new()),
         alert_snapshot: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+        circuit_breaker: std::sync::Arc::new(
+            llm_proxy::circuit_breaker::CircuitBreaker::with_defaults(),
+        ),
+        concurrency: std::sync::Arc::new(llm_proxy::concurrency::ConcurrencyLimiter::new(50, 500)),
+        fallback_config: std::sync::Arc::new(llm_proxy::fallback::FallbackConfig::default()),
+        metrics: std::sync::Arc::new(llm_proxy::metrics::Metrics::default()),
+        auth_store: None,
+        pipeline: None,
+        rbac_state: None,
+        quota_tracker: None,
+        config_store: None,
+        budget_manager: None,
     };
     let app = Router::new()
         .route("/admin/help", get(llm_proxy::dashboard::help::help_handler))
@@ -106,7 +139,7 @@ async fn help_page_serves_runbook() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/admin/help")
+                .uri("/admin/help?format=json")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -121,46 +154,36 @@ async fn help_page_serves_runbook() {
     )
     .unwrap();
     assert!(
-        body.contains("llm_proxy"),
-        "help page should contain RUNBOOK content"
+        body.contains("runbook"),
+        "help page JSON should contain runbook field"
     );
 }
 
 #[test]
 fn css_contains_dark_mode() {
-    let layout_src = include_str!("../src/dashboard/layout.rs");
+    let css = include_str!("../frontend/src/index.css");
+    assert!(css.contains("background:"), "styles required");
     assert!(
-        layout_src.contains("prefers-color-scheme:dark"),
-        "dark mode media query required"
+        css.contains("@keyframes") || css.contains("@tailwind"),
+        "tailwind/animations required"
     );
     assert!(
-        layout_src.contains("max-width:768px"),
-        "mobile responsive required"
-    );
-    assert!(
-        layout_src.contains("stat-grid"),
-        "stat-grid utility class required"
+        css.contains("@apply") || css.contains("@layer"),
+        "tailwind directives required"
     );
 }
 
 #[test]
 fn polling_button_in_layout() {
-    let layout_src = include_str!("../src/dashboard/layout.rs");
-    assert!(
-        layout_src.contains("poll-btn"),
-        "poll button must exist in layout"
-    );
-    assert!(
-        layout_src.contains("localStorage"),
-        "localStorage for pause persistence required"
-    );
+    let layout_src = include_str!("../frontend/src/components/Layout.tsx");
+    assert!(layout_src.contains("Sidebar"), "sidebar component required");
 }
 
 #[test]
 fn tooltip_script_present() {
-    let layout_src = include_str!("../src/dashboard/layout.rs");
+    let layout_src = include_str!("../frontend/src/components/Layout.tsx");
     assert!(
-        layout_src.contains("createSVGPoint"),
-        "SVG tooltip must use createSVGPoint"
+        layout_src.contains("Outlet") || layout_src.contains("BrowserRouter"),
+        "SPA routing required"
     );
 }

@@ -15,9 +15,18 @@
 //!   chunk.
 
 pub mod anthropic;
+pub mod anthropic_stream;
+pub mod azure;
+pub mod bedrock;
+pub mod cohere;
 pub mod gemini;
+pub mod gemini_stream;
 pub mod inspector;
+pub mod mistral;
+pub mod ollama;
 pub mod openai;
+pub mod registry;
+pub mod vllm;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -27,6 +36,24 @@ use crate::config::KeyEntry;
 use crate::error::AppError;
 use crate::types::ChatCompletionRequest;
 use crate::types::ChatCompletionResponse;
+
+/// Declared capabilities of a provider/model combination (T73).
+///
+/// Used by the router to validate model requests and by the frontend
+/// model registry to display capability icons.
+#[derive(Debug, Clone, Default)]
+pub struct ProviderCapabilities {
+    /// Whether this provider/model supports image/vision inputs.
+    pub supports_vision: bool,
+    /// Whether this provider/model supports tool/function calling.
+    pub supports_tool_calling: bool,
+    /// Whether this provider/model supports JSON mode (structured output).
+    pub supports_json_mode: bool,
+    /// Maximum context size in tokens.
+    pub max_context_tokens: u32,
+    /// Maximum output tokens.
+    pub max_output_tokens: u32,
+}
 
 /// The result of a provider `chat()` call.
 ///
@@ -73,10 +100,13 @@ pub trait Provider: Send + Sync {
     /// Lightweight health probe. Called by `health.rs` to determine whether a
     /// previously-bad key has recovered.
     ///
-    /// Default implementation uses `unimplemented!()` — concrete providers must
-    /// override this.
+    /// Default implementation returns an `Internal` error rather than panicking
+    /// (NEW-AUDIT-12). Concrete providers MUST override this.
     async fn probe(&self, _key: &KeyEntry) -> Result<(), AppError> {
-        unimplemented!("probe not implemented for provider {}", self.id())
+        Err(AppError::Internal(format!(
+            "probe not implemented for provider {}",
+            self.id()
+        )))
     }
 
     /// Read-only sidecar: extract provider-specific audit fields from a
@@ -88,6 +118,15 @@ pub trait Provider: Send + Sync {
     /// when the provider has nothing to contribute.
     fn extract_audit(&self, _resp: &ProviderResponse) -> crate::audit::AuditFromProvider {
         crate::audit::AuditFromProvider::default()
+    }
+
+    /// Declared capabilities for this provider (T73).
+    ///
+    /// Used by the router for capability-based model validation (e.g.,
+    /// rejecting a vision request on a text-only model). Default
+    /// implementation returns conservative defaults.
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities::default()
     }
 }
 

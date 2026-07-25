@@ -43,7 +43,8 @@ impl OpenAiProvider {
         let client = reqwest::Client::builder()
             .pool_max_idle_per_host(32)
             .timeout(Duration::from_secs(120))
-            .user_agent("llm_proxy/0.1")
+            .user_agent("llm_proxy/2.0")
+            .tcp_nodelay(true)
             .build()
             .expect("reqwest::Client::builder should not fail");
 

@@ -87,7 +87,7 @@ impl Provider for GeminiProvider {
                     msg: format!("upstream {s}"),
                 });
             }
-            let body = Box::pin(resp.bytes_stream().map(|item| match item {
+            let raw_stream = Box::pin(resp.bytes_stream().map(|item| match item {
                 Ok(b) => Ok(b),
                 Err(e) => Err(AppError::Upstream {
                     status: None,
@@ -96,6 +96,7 @@ impl Provider for GeminiProvider {
                     msg: format!("stream error: {e}"),
                 }),
             }));
+            let body = super::gemini_stream::relay_gemini_stream(raw_stream, &req.model);
             return Ok(ProviderResponse::Stream { body });
         }
         let gm_req = openai_to_gemini(&req);

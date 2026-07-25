@@ -49,12 +49,12 @@ async fn aggregate_last_hour(pool: &SqlitePool) -> Result<(), AppError> {
 
     sqlx::query(
         "INSERT INTO audit_hourly \
-         (hour, model, pool_id, key_hash, cache_source, error_code, finish_reason, tenant_id, \
+         (hour, model, pool_id, key_hash, cache_source, error_code, finish_reason, upstream_model, tenant_id, \
           request_count, success_count, retry_total, \
           prompt_tokens, completion_tokens, total_tokens, \
-          cached_tokens, reasoning_tokens, audio_tokens, \
+          cached_tokens, reasoning_tokens, audio_tokens, cost_usd, \
           latency_ms_sum, ttft_ms_sum, stream_count) \
-         SELECT ?1, model, pool_id, key_hash, cache_source, error_code, finish_reason, tenant_id, \
+         SELECT ?1, model, pool_id, key_hash, COALESCE(cache_source, ''), COALESCE(error_code, ''), COALESCE(finish_reason, ''), COALESCE(upstream_model, ''), COALESCE(tenant_id, 'default'), \
                 COUNT(*) AS request_count, \
                 SUM(CASE WHEN status_code >= 200 AND status_code < 300 THEN 1 ELSE 0 END) AS success_count, \
                 SUM(COALESCE(retry_count, 0)) AS retry_total, \
@@ -64,13 +64,14 @@ async fn aggregate_last_hour(pool: &SqlitePool) -> Result<(), AppError> {
                 SUM(COALESCE(cached_tokens, 0)) AS cached_tokens, \
                 SUM(COALESCE(reasoning_tokens, 0)) AS reasoning_tokens, \
                 SUM(COALESCE(audio_tokens, 0)) AS audio_tokens, \
+                SUM(COALESCE(cost_usd, 0)) AS cost_usd, \
                 SUM(COALESCE(latency_ms, 0)) AS latency_ms_sum, \
                 SUM(COALESCE(ttft_ms, 0)) AS ttft_ms_sum, \
                 SUM(CASE WHEN is_stream != 0 THEN 1 ELSE 0 END) AS stream_count \
          FROM request_log \
          WHERE ts >= ?2 AND ts < ?3 \
-         GROUP BY model, pool_id, key_hash, cache_source, error_code, finish_reason, tenant_id \
-         ON CONFLICT(hour, model, pool_id, key_hash, cache_source, error_code, finish_reason, tenant_id) \
+         GROUP BY model, pool_id, key_hash, COALESCE(cache_source, ''), COALESCE(error_code, ''), COALESCE(finish_reason, ''), COALESCE(upstream_model, ''), COALESCE(tenant_id, 'default') \
+         ON CONFLICT(hour, model, pool_id, key_hash, cache_source, error_code, finish_reason, upstream_model, tenant_id) \
          DO UPDATE SET \
            request_count       = excluded.request_count, \
            success_count       = excluded.success_count, \
@@ -81,6 +82,7 @@ async fn aggregate_last_hour(pool: &SqlitePool) -> Result<(), AppError> {
            cached_tokens       = excluded.cached_tokens, \
            reasoning_tokens    = excluded.reasoning_tokens, \
            audio_tokens        = excluded.audio_tokens, \
+           cost_usd            = excluded.cost_usd, \
            latency_ms_sum      = excluded.latency_ms_sum, \
            ttft_ms_sum         = excluded.ttft_ms_sum, \
            stream_count        = excluded.stream_count",

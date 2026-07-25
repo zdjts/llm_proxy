@@ -1,0 +1,41 @@
+# llm_proxy — Docker Compose deployment
+# Usage: docker compose up -d
+
+services:
+  llm_proxy:
+    build: .
+    container_name: llm_proxy
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data
+    environment:
+      - RUST_LOG=info
+      - LLM_PROXY_CONFIG=/app/config.yaml
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8080/health/live"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "2"
+        reservations:
+          memory: 64M
+          cpus: "0.5"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - llm_proxy_net
+
+networks:
+  llm_proxy_net:
+    driver: bridge

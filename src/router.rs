@@ -11,7 +11,7 @@
 //! - Full-pool exhaustion returns `AppError::Internal` (HTTP 500).
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use dashmap::DashMap;
 use rand::distributions::WeightedIndex;
@@ -225,6 +225,44 @@ impl Router {
     }
 }
 
+/// Shared handle to the active [`Router`], atomically swappable on config
+/// hot-reload.
+///
+/// Every clone of `AppState` references the same inner lock, so swapping in a
+/// freshly built router (e.g. when the DB-backed [`ConfigStore`] detects a
+/// change) is visible to all in-flight requests. The lock is only held for the
+/// duration of a single `Arc` clone — never across an `.await`.
+///
+/// [`ConfigStore`]: crate::config_store::ConfigStore
+#[derive(Clone)]
+pub struct RouterHandle {
+    current: Arc<RwLock<Arc<Router>>>,
+}
+
+impl RouterHandle {
+    pub fn new(router: Arc<Router>) -> Self {
+        Self {
+            current: Arc::new(RwLock::new(router)),
+        }
+    }
+
+    /// Snapshot of the currently active router.
+    pub fn current(&self) -> Arc<Router> {
+        self.current
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// Atomically swap in a freshly built router (config hot-reload).
+    pub fn swap(&self, router: Arc<Router>) {
+        *self
+            .current
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = router;
+    }
+}
+
 /// Dashboard-facing pool snapshot.
 pub struct PoolSnapshot {
     pub pool_id: String,
@@ -350,5 +388,29 @@ mod tests {
         let err = Router::pool_exhausted("my_pool");
         let msg = format!("{err}");
         assert!(msg.contains("my_pool"));
+    }
+
+    #[test]
+    fn it_swaps_router_snapshot() {
+        let handle = RouterHandle::new(Arc::new(Router::new(
+            HashMap::new(),
+            HashMap::new(),
+            Arc::new(BadKeyRegistry::new()),
+        )));
+        assert!(handle.current().model_list().is_empty());
+
+        let mut models = HashMap::new();
+        models.insert(
+            "gpt-4".to_string(),
+            ("pool-a".to_string(), pool_with_weights(&[1]), None),
+        );
+        let new_router = Arc::new(Router::new(
+            models,
+            HashMap::new(),
+            Arc::new(BadKeyRegistry::new()),
+        ));
+        handle.swap(new_router);
+
+        assert_eq!(handle.current().model_list(), vec!["gpt-4"]);
     }
 }

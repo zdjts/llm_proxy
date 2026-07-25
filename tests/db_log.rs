@@ -38,6 +38,8 @@ async fn log_request_writes_one_row() {
         error: None,
         audit: AuditDetail::none(),
         error_code: None,
+        user_agent: None,
+        cost_usd: None,
     };
 
     db::log_request(&pool, &log).await.unwrap();
@@ -72,6 +74,8 @@ async fn total_tokens_equals_prompt_plus_completion() {
         error: None,
         audit: AuditDetail::none(),
         error_code: None,
+        user_agent: None,
+        cost_usd: None,
     };
 
     db::log_request(&pool, &log).await.unwrap();
@@ -120,6 +124,8 @@ async fn nullable_fields_store_none() {
         error: None,
         audit: AuditDetail::none(),
         error_code: None,
+        user_agent: None,
+        cost_usd: None,
     };
 
     db::log_request(&pool, &log).await.unwrap();
@@ -156,6 +162,8 @@ async fn error_row_has_non_empty_error_field() {
         error: Some("upstream timeout".into()),
         audit: AuditDetail::none(),
         error_code: None,
+        user_agent: None,
+        cost_usd: None,
     };
 
     db::log_request(&pool, &log).await.unwrap();

@@ -227,6 +227,8 @@ async fn log_with_openai_cache_writes_columns() {
         error: None,
         audit,
         error_code: None,
+        user_agent: None,
+        cost_usd: None,
     };
 
     db::log_request(&pool, &log).await.unwrap();
@@ -264,6 +266,8 @@ async fn log_without_cache_writes_nulls() {
         error: None,
         audit: AuditDetail::none(),
         error_code: None,
+        user_agent: None,
+        cost_usd: None,
     };
 
     db::log_request(&pool, &log).await.unwrap();
@@ -310,6 +314,8 @@ async fn log_with_retry_count_tenant_id() {
             ..AuditDetail::none()
         },
         error_code: None,
+        user_agent: None,
+        cost_usd: None,
     };
 
     db::log_request(&pool, &log).await.unwrap();
@@ -352,6 +358,8 @@ async fn error_code_is_pool_exhausted() {
         error: Some("all keys in pool 'p1' exhausted".into()),
         audit: AuditDetail::none(),
         error_code: Some(code.to_string()),
+        user_agent: None,
+        cost_usd: None,
     };
 
     db::log_request(&pool, &log).await.unwrap();
