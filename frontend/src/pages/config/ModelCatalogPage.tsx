@@ -1,10 +1,18 @@
-import { Card, EmptyState } from '@/components/ui';
+import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Plus } from 'lucide-react';
+import { apiError, createModel, fetchModels, type ModelRegistry, updateModel } from '@/lib/api';
+import { Badge, Button, Card, EmptyState, Modal, Skeleton } from '@/components/ui';
 
+const blank = (): ModelRegistry => ({ id: '', display_name: '', provider_kind: 'openai', provider_config_id: null, supports_vision: false, supports_tool_calling: false, supports_json_mode: false, max_context_tokens: 4096, max_output_tokens: 4096, input_price_per_1m: null, output_price_per_1m: null, capabilities_json: {}, enabled: true });
 export function ModelCatalogPage() {
-  return (
-    <div className="space-y-6">
-      <div><h1 className="text-2xl font-bold text-surface-800">Model Catalog</h1><p className="text-sm text-surface-400 mt-1">Browse registered models and their capabilities</p></div>
-      <EmptyState title="Loading model catalog" description="Model registry data is being loaded from the database." />
-    </div>
-  );
+  const qc = useQueryClient(); const { data, isLoading, isError } = useQuery({ queryKey: ['model-catalog'], queryFn: fetchModels });
+  const [editing, setEditing] = useState<ModelRegistry | null>(null); const [isNew, setIsNew] = useState(false); const [error, setError] = useState('');
+  const mutation = useMutation({ mutationFn: (m: ModelRegistry) => isNew ? createModel(m) : updateModel(m.id, m), onSuccess: () => { qc.invalidateQueries({ queryKey: ['model-catalog'] }); setEditing(null); setError(''); }, onError: e => setError(apiError(e)) });
+  if (isLoading) return <Skeleton className="h-64 w-full" />;
+  if (isError) return <EmptyState title="Unable to load model catalog" description="The catalog API could not be reached." />;
+  const models = data?.models ?? [];
+  const openNew = () => { setIsNew(true); setEditing(blank()); setError(''); };
+  const openEdit = (m: ModelRegistry) => { setIsNew(false); setEditing({ ...m }); setError(''); };
+  return <div className="space-y-6"><div className="flex items-center justify-between"><div><h1 className="text-2xl font-bold text-surface-800">Model Catalog</h1><p className="text-sm text-surface-400 mt-1">Manage registry metadata and availability.</p></div><Button onClick={openNew}><Plus size={16} /> New model</Button></div>{models.length === 0 ? <EmptyState title="No models configured" /> : <div className="grid gap-3 md:grid-cols-2">{models.map(m => <Card key={m.id} className="p-5"><div className="flex justify-between"><div><div className="font-semibold">{m.display_name}</div><div className="font-mono text-xs text-surface-500 mt-1">{m.id}</div></div><Badge variant={m.enabled ? 'success' : 'warning'}>{m.enabled ? 'Enabled' : 'Disabled'}</Badge></div><div className="text-xs text-surface-500 mt-3">{m.provider_kind} · context {m.max_context_tokens} · output {m.max_output_tokens}</div><div className="text-xs text-surface-400 mt-1">vision {m.supports_vision ? 'yes' : 'no'} · tools {m.supports_tool_calling ? 'yes' : 'no'} · JSON {m.supports_json_mode ? 'yes' : 'no'}</div><Button className="mt-4" size="sm" variant="secondary" onClick={() => openEdit(m)}>Edit</Button></Card>)}</div>}<Modal open={editing !== null} onClose={() => { setEditing(null); setError(''); }} title={isNew ? 'New model' : 'Edit model'}>{editing && <div className="space-y-3">{(['id','display_name','provider_kind','provider_config_id'] as const).map(k => <input key={k} disabled={k === 'id' && !isNew} className="w-full px-3 py-2 rounded-lg border border-surface-200 text-sm" placeholder={k} value={editing[k] ?? ''} onChange={e => setEditing({ ...editing, [k]: e.target.value || (k === 'provider_config_id' ? null : '') })} />)}{(['max_context_tokens','max_output_tokens','input_price_per_1m','output_price_per_1m'] as const).map(k => <input key={k} type="number" min={k.includes('price') ? 0 : 1} className="w-full px-3 py-2 rounded-lg border border-surface-200 text-sm" placeholder={k} value={editing[k] ?? ''} onChange={e => setEditing({ ...editing, [k]: e.target.value === '' ? null : Number(e.target.value) })} />)}<textarea className="w-full px-3 py-2 rounded-lg border border-surface-200 text-sm" placeholder="capabilities_json" value={JSON.stringify(editing.capabilities_json)} onChange={e => { try { setEditing({ ...editing, capabilities_json: JSON.parse(e.target.value) }); } catch { /* server validates malformed JSON */ } }} /><label className="flex gap-2 text-sm"><input type="checkbox" checked={editing.enabled} onChange={e => setEditing({ ...editing, enabled: e.target.checked })} /> Enabled</label>{(['supports_vision','supports_tool_calling','supports_json_mode'] as const).map(k => <label key={k} className="flex gap-2 text-sm"><input type="checkbox" checked={editing[k]} onChange={e => setEditing({ ...editing, [k]: e.target.checked })} /> {k}</label>)}{error && <p className="text-sm text-red-600">{error}</p>}<div className="flex justify-end"><Button loading={mutation.isPending} onClick={() => mutation.mutate(editing)}>Save</Button></div></div>}</Modal></div>;
 }

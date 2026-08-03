@@ -11,7 +11,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use sqlx::SqlitePool;
 
-use crate::config::Config;
 use crate::error::AppError;
 
 #[derive(Deserialize, Default)]
@@ -58,8 +57,9 @@ pub async fn cost_overview_handler(
     Query(q): Query<CostQuery>,
 ) -> Result<axum::response::Response, AppError> {
     let tenants = query_tenant_list(&state.db).await?;
-    let rows = query_cost(&state.db, &state.config, &q).await?;
-    let stats = query_cost_stats(&state.db, &state.config, &q).await?;
+    let pricing = state.config_store.pricing().await;
+    let rows = query_cost(&state.db, &pricing, &q).await?;
+    let stats = query_cost_stats(&state.db, &pricing, &q).await?;
 
     if q.format.as_deref() == Some("csv") {
         let mut out = String::from(
@@ -116,7 +116,7 @@ async fn query_tenant_list(pool: &SqlitePool) -> Result<Vec<String>, AppError> {
 
 async fn query_cost(
     pool: &SqlitePool,
-    config: &Config,
+    config: &crate::config::pricing::PricingConfig,
     q: &CostQuery,
 ) -> Result<Vec<CostRow>, AppError> {
     let now = std::time::SystemTime::now()
@@ -149,7 +149,8 @@ async fn query_cost(
     let mut result: Vec<CostRow> = rows
         .into_iter()
         .map(|r| {
-            let price = config.pricing.lookup(&r.model, q.tenant.as_deref());
+            let accounting = config.accounting();
+            let price = accounting.lookup(&r.model, q.tenant.as_deref());
             let prompt_price = price.prompt / 1_000_000.0;
             let completion_price = price.completion / 1_000_000.0;
             let cost = if prompt_price > 0.0 || completion_price > 0.0 {
@@ -191,7 +192,7 @@ struct HourlyRow {
 
 async fn query_cost_stats(
     pool: &SqlitePool,
-    config: &Config,
+    config: &crate::config::pricing::PricingConfig,
     q: &CostQuery,
 ) -> Result<CostStats, AppError> {
     let now = std::time::SystemTime::now()
@@ -243,7 +244,8 @@ async fn query_cost_stats(
         let sum: f64 = rows
             .iter()
             .map(|r| {
-                let price = config.pricing.lookup(&r.model, q.tenant.as_deref());
+                let accounting = config.accounting();
+                let price = accounting.lookup(&r.model, q.tenant.as_deref());
                 r.prompt_tokens as f64 * price.prompt / 1_000_000.0
                     + r.completion_tokens as f64 * price.completion / 1_000_000.0
             })

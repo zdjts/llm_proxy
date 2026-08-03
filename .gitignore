@@ -11,7 +11,8 @@ config.yaml
 !tests/fixtures/config.yaml
 data/
 test-gateway.sh
-docs/
+docs/*
+!docs/adr-017-runtime-boundaries.md
 
 # Frontend
 frontend/node_modules/
@@ -19,3 +20,5 @@ frontend/dist/
 
 # JJ
 /.jj/
+prompts/
+.orc/

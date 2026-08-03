@@ -1,8 +1,10 @@
 //! Dynamic client-key management store (Module A1 — v2.0).
 //!
 //! Replaces the static `AuthState` with a DashMap-backed `AuthStore` that
-//! supports runtime CRUD, key rotation, and optional persistence back to
-//! the config file.  Exposed via `/admin/api/client-keys`.
+//! supports runtime CRUD and key rotation. Runtime changes are process-local: the
+//! existing `client_key_store` table intentionally stores only non-recoverable
+//! metadata, so a restart rebuilds this store from bootstrap entries. Exposed
+//! via `/admin/api/client-keys`.
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -43,6 +45,26 @@ impl From<ClientKeyEntry> for ClientKeyRecord {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ClientKeyPublicRecord {
+    pub tenant_id: String,
+    pub key_hash: String,
+    pub created_at: i64,
+    pub enabled: bool,
+    pub label: String,
+}
+
+impl From<&ClientKeyRecord> for ClientKeyPublicRecord {
+    fn from(record: &ClientKeyRecord) -> Self {
+        Self {
+            tenant_id: record.tenant_id.clone(),
+            key_hash: record.key_hash.clone(),
+            created_at: record.created_at,
+            enabled: record.enabled,
+            label: record.label.clone(),
+        }
+    }
+}
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateKeyRequest {
     pub key: String,
@@ -361,6 +383,30 @@ mod tests {
         assert_eq!(record.key, "sk-test");
         assert!(store.validate("sk-test").is_none());
         assert_eq!(store.len(), 0);
+    }
+
+    #[test]
+    fn runtime_changes_are_not_restored_from_metadata_only_reload() {
+        let store = test_store();
+        store
+            .add(CreateKeyRequest {
+                key: "sk-runtime-only".into(),
+                tenant_id: "tenant-a".into(),
+                label: "ephemeral".into(),
+            })
+            .unwrap();
+        let runtime_hash = db::compute_key_hash("sk-runtime-only");
+        assert!(store.validate("sk-runtime-only").is_some());
+
+        // A restart can only reconstruct from bootstrap plaintext entries. The
+        // metadata-only client_key_store cannot recreate this runtime key.
+        let reloaded = AuthStore::new(vec![ClientKeyEntry {
+            key: "sk-bootstrap".into(),
+            tenant_id: "default".into(),
+        }]);
+        assert!(reloaded.validate("sk-runtime-only").is_none());
+        assert!(reloaded.get_by_hash(&runtime_hash).is_none());
+        assert!(reloaded.validate("sk-bootstrap").is_some());
     }
 
     #[test]

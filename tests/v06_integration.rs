@@ -99,8 +99,19 @@ async fn cost_csv_endpoint_returns_200() {
             std::collections::HashMap::new(),
             Arc::new(llm_proxy::router::BadKeyRegistry::new()),
         ))),
+        catalog: llm_proxy::model_catalog::ModelCatalog::new(
+            llm_proxy::router::RouterHandle::new(Arc::new(llm_proxy::router::Router::new(
+                Default::default(),
+                Default::default(),
+                Arc::new(llm_proxy::router::BadKeyRegistry::new()),
+            ))),
+            Arc::new(llm_proxy::config_store::ConfigStore::for_test(
+                pool.clone(),
+                config.model_metadata.clone(),
+            )),
+        ),
         db: pool.clone(),
-        config,
+        config: config.clone(),
         cache: llm_proxy::cache::PromptCache::new(0),
         alert_tx,
         error_burst_counters: Arc::new(dashmap::DashMap::new()),
@@ -113,7 +124,10 @@ async fn cost_csv_endpoint_returns_200() {
         pipeline: None,
         rbac_state: None,
         quota_tracker: None,
-        config_store: None,
+        config_store: Arc::new(llm_proxy::config_store::ConfigStore::for_test(
+            pool.clone(),
+            config.model_metadata.clone(),
+        )),
         budget_manager: None,
     };
 

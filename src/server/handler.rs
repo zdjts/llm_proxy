@@ -1,5 +1,6 @@
 //! Request handler — split from server/mod.rs (Module C2 — v2.0).
 
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Json;
@@ -17,7 +18,7 @@ use crate::db;
 use crate::error::AppError;
 use crate::provider::ProviderResponse;
 use crate::provider::inspector::StreamInspector;
-use crate::types::{ChatCompletionRequest, Model, ModelsResponse};
+use crate::types::{ChatCompletionRequest, ModelMetadataResponse, ModelsResponse};
 
 use super::AppState;
 
@@ -39,7 +40,7 @@ pub(crate) struct StreamContext {
     pub min_latency_ms: u64,
     pub user_agent: Option<String>,
     pub client_ip: Option<String>,
-    pub pricing: crate::config::pricing::PricingConfig,
+    pricing: Arc<crate::config::pricing::PricingConfig>,
     pub budget_manager: Option<std::sync::Arc<crate::budget::BudgetManager>>,
 }
 
@@ -90,7 +91,8 @@ pub async fn chat_completions_handler(
 
     // ── v4.0 Track I (AUDIT-13 Fix): budget pre-check ──
     if let Some(ref bm) = state.budget_manager {
-        let cost_est = estimate_cost(&state.config.pricing, &model, &tenant_id);
+        let pricing = state.config_store.pricing().await;
+        let cost_est = estimate_cost(&pricing, &model, &tenant_id);
         let check = bm.check_budget(&tenant_id, cost_est).await?;
         if !check.allowed {
             state.metrics.inc_failed();
@@ -123,12 +125,8 @@ pub async fn chat_completions_handler(
         && let Some(cached) = state.cache.get(&req)
     {
         state.metrics.inc_cache_hit();
-        let cost = compute_cost(
-            &state.config.pricing,
-            &model,
-            &tenant_id,
-            cached.usage.as_ref(),
-        );
+        let pricing = state.config_store.pricing().await;
+        let cost = compute_cost(&pricing, &model, &tenant_id, cached.usage.as_ref());
         let log = db::RequestLog {
             id: request_id.clone(),
             ts: SystemTime::now()
@@ -156,8 +154,9 @@ pub async fn chat_completions_handler(
         return Ok((StatusCode::OK, Json(cached)).into_response());
     }
 
-    let router = state.router.current();
-    let (provider, pool, pool_id, default_params) = router.resolve(&model)?;
+    let chat_service = crate::chat_service::ChatCompletionService::new(state.router.clone());
+    let router = chat_service.snapshot();
+    let (provider, pool, pool_id, default_params) = chat_service.resolve(&router, &model)?;
 
     if let (Some(serde_json::Value::Object(pm)), serde_json::Value::Object(extra)) =
         (default_params, &mut req.extra)
@@ -168,12 +167,13 @@ pub async fn chat_completions_handler(
     }
 
     let mut retries: Vec<String> = Vec::new();
-    let max_retries = state.config.failover.max_retries as usize;
+    let runtime_policy = state.config_store.runtime().await;
+    let max_retries = runtime_policy.failover.max_retries as usize;
     let mut attempts: usize = 0;
 
     loop {
         attempts += 1;
-        let key = match router.pick_key(pool, pool_id) {
+        let key = match chat_service.pick_key(&router, pool, pool_id) {
             Some(k) => k,
             None => {
                 for key_hash in &retries {
@@ -242,8 +242,9 @@ pub async fn chat_completions_handler(
                             .metrics
                             .add_completion_tokens(usage.completion_tokens as u64);
 
+                        let pricing = state.config_store.pricing().await;
                         let cost = compute_cost(
-                            &state.config.pricing,
+                            &pricing,
                             &req.model,
                             &tenant_id,
                             chat_resp.usage.as_ref(),
@@ -276,16 +277,16 @@ pub async fn chat_completions_handler(
                             let _ = bm.record_spend(&tenant_id, cost).await;
                         }
 
-                        if latency_ms > state.config.alerts.min_latency_ms as i64 {
+                        if latency_ms > runtime_policy.alerts.min_latency_ms as i64 {
                             let _ = state.alert_tx.send(AlertEvent::LatencySpike {
                                 ts,
                                 model: req.model.clone(),
                                 latency_ms,
-                                threshold_ms: state.config.alerts.min_latency_ms,
+                                threshold_ms: runtime_policy.alerts.min_latency_ms,
                             });
                         }
 
-                        if state.config.cache_max_entries > 0 {
+                        if runtime_policy.cache_max_entries > 0 {
                             state.cache.put(&req, chat_resp);
                         }
 
@@ -306,10 +307,10 @@ pub async fn chat_completions_handler(
                                 retry_count: retries.len() as i32,
                                 tenant_id: tenant_id.clone(),
                                 alert_tx: state.alert_tx.clone(),
-                                min_latency_ms: state.config.alerts.min_latency_ms,
+                                min_latency_ms: runtime_policy.alerts.min_latency_ms,
                                 user_agent: user_agent.clone(),
                                 client_ip: client_ip.clone(),
-                                pricing: state.config.pricing.clone(),
+                                pricing: state.config_store.pricing().await,
                                 budget_manager: state.budget_manager.clone(),
                             },
                             body,
@@ -331,7 +332,7 @@ pub async fn chat_completions_handler(
                     .entry(burst_key)
                     .and_modify(|c| *c += 1)
                     .or_insert(1);
-                if *burst_count >= state.config.alerts.min_error_burst {
+                if *burst_count >= runtime_policy.alerts.min_error_burst {
                     let _ = state.alert_tx.send(AlertEvent::UpstreamError {
                         ts: SystemTime::now()
                             .duration_since(UNIX_EPOCH)
@@ -347,9 +348,9 @@ pub async fn chat_completions_handler(
                     });
                 }
                 if bad_key_hint
-                    && status.is_some_and(|s| state.config.failover.bad_status_codes.contains(&s))
+                    && status.is_some_and(|s| runtime_policy.failover.bad_status_codes.contains(&s))
                 {
-                    router.mark_bad(pool_id, &key);
+                    chat_service.mark_bad(&router, pool_id, &key);
                     state.circuit_breaker.record_failure(pool_id, &key_hash);
                     state.metrics.inc_key_demotion();
                     retries.push(key_hash.clone());
@@ -389,25 +390,23 @@ pub async fn chat_completions_handler(
     }
 }
 
+pub async fn model_metadata_handler(
+    State(state): State<AppState>,
+    axum::Extension(_client): axum::Extension<AuthedClient>,
+) -> Result<Json<ModelMetadataResponse>, AppError> {
+    Ok(Json(ModelMetadataResponse {
+        object: "model_metadata_list".into(),
+        data: state.catalog.list_metadata().await,
+    }))
+}
+
 pub async fn models_handler(
     State(state): State<AppState>,
     axum::Extension(_client): axum::Extension<AuthedClient>,
 ) -> Result<Json<ModelsResponse>, AppError> {
-    let models: Vec<Model> = state
-        .config
-        .model_to_pool
-        .keys()
-        .map(|name| Model {
-            id: name.clone(),
-            object: "model".into(),
-            created: 0,
-            owned_by: "openai".into(),
-        })
-        .collect();
-
     Ok(Json(ModelsResponse {
         object: "list".into(),
-        data: models,
+        data: state.catalog.list_models(),
     }))
 }
 
@@ -547,7 +546,8 @@ pub(crate) fn compute_cost(
     usage: Option<&crate::types::Usage>,
 ) -> Option<f64> {
     let usage = usage?;
-    let price = pricing.lookup(model, Some(tenant));
+    let accounting = pricing.accounting();
+    let price = accounting.lookup(model, Some(tenant));
     if price.prompt == 0.0 && price.completion == 0.0 {
         return None;
     }
@@ -563,7 +563,8 @@ pub(crate) fn estimate_cost(
     model: &str,
     tenant: &str,
 ) -> f64 {
-    let price = pricing.lookup(model, Some(tenant));
+    let accounting = pricing.accounting();
+    let price = accounting.lookup(model, Some(tenant));
     let prompt_est = 1000.0 * price.prompt / 1_000_000.0;
     let completion_est = 1000.0 * price.completion / 1_000_000.0;
     prompt_est + completion_est

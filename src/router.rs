@@ -195,6 +195,16 @@ impl Router {
         models
     }
 
+    pub fn model_pool_list(&self) -> Vec<(String, String)> {
+        let mut models: Vec<_> = self
+            .model_map
+            .iter()
+            .map(|(model, (pool, _, _))| (model.clone(), pool.clone()))
+            .collect();
+        models.sort_by(|a, b| a.0.cmp(&b.0));
+        models
+    }
+
     /// Snapshot of pool state for the dashboard key-health screen.
     pub fn pool_snapshot(&self) -> Vec<PoolSnapshot> {
         let mut seen = std::collections::HashSet::new();

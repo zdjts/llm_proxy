@@ -1,22 +1,25 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2 } from 'lucide-react';
-import { api } from '@/lib/api';
+import { createPool, deletePool, fetchPools, apiError } from '@/lib/api';
 import { Card, Button, Modal, Badge, EmptyState, Skeleton, Table, StatusDot } from '@/components/ui';
 import { useState } from 'react';
 
 export function PoolListPage() {
   const qc = useQueryClient();
-  const { data, isLoading } = useQuery({ queryKey: ['pools'], queryFn: () => api.get('/admin/api/pools').then(r => r.data) });
+  const { data, isLoading } = useQuery({ queryKey: ['pools'], queryFn: fetchPools });
+  const [formError, setFormError] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState({ id: '', strategy: 'weighted_random', keys: [{ key: '', weight: 1 }] });
 
   const createMut = useMutation({
-    mutationFn: () => api.post('/admin/api/pools', form),
+    mutationFn: () => createPool(form),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['pools'] }); setShowCreate(false); },
+    onError: (error) => setFormError(apiError(error)),
   });
   const deleteMut = useMutation({
-    mutationFn: (id: string) => api.delete(`/admin/api/pools/${id}`),
+    mutationFn: deletePool,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['pools'] }),
+    onError: (error) => setFormError(apiError(error)),
   });
 
   if (isLoading) return <Skeleton className="h-64 w-full" />;
@@ -52,7 +55,7 @@ export function PoolListPage() {
           ))}
         </div>
       )}
-      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Add Key Pool">
+      <Modal open={showCreate} onClose={() => { setShowCreate(false); setFormError(''); }} title="Add Key Pool">
         <div className="space-y-3">
           <input className="w-full px-3 py-2 rounded-lg border border-surface-200 text-sm" placeholder="Pool ID" value={form.id} onChange={e => setForm({ ...form, id: e.target.value })} />
           {form.keys.map((k, i) => (
@@ -62,6 +65,7 @@ export function PoolListPage() {
             </div>
           ))}
           <Button variant="secondary" size="sm" onClick={() => setForm({ ...form, keys: [...form.keys, { key: '', weight: 1 }] })}>+ Add Key</Button>
+          {formError && <p className="text-sm text-red-600">{formError}</p>}
           <div className="flex gap-2 justify-end pt-2"><Button variant="secondary" onClick={() => setShowCreate(false)}>Cancel</Button><Button onClick={() => createMut.mutate()} loading={createMut.isPending}>Create</Button></div>
         </div>
       </Modal>

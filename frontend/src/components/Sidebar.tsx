@@ -23,7 +23,7 @@ const allNavItems: NavItem[] = [
   { to: '/', label: 'overview', icon: LayoutDashboard, section: 'main' },
   { to: '/live', label: 'live monitor', icon: Activity, section: 'main' },
 
-  // ── Configuration (Track M) ──
+  { to: '/config', label: 'config console', icon: Settings, permission: 'audit.view', section: 'config' },
   { to: '/config/providers', label: 'providers', icon: Server, permission: 'providers.manage', section: 'config' },
   { to: '/config/pools', label: 'key pools', icon: Key, permission: 'keys.manage', section: 'config' },
   { to: '/config/routing', label: 'routing', icon: Boxes, permission: 'routing.edit', section: 'config' },

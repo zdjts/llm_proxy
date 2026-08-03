@@ -1,23 +1,26 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, RefreshCw, Server } from 'lucide-react';
-import { api } from '@/lib/api';
+import { createProvider, deleteProvider, fetchProviders, apiError } from '@/lib/api';
 import { Card, Button, Modal, Badge, EmptyState, Skeleton, Table } from '@/components/ui';
 import { useState } from 'react';
 
 export function ProviderListPage() {
   const qc = useQueryClient();
-  const { data, isLoading } = useQuery({ queryKey: ['providers'], queryFn: () => api.get('/admin/api/providers').then(r => r.data) });
+  const { data, isLoading } = useQuery({ queryKey: ['providers'], queryFn: fetchProviders });
+  const [formError, setFormError] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState({ id: '', kind: 'openai', base_url: '', pool_id: '' });
 
   const createMutation = useMutation({
-    mutationFn: () => api.post('/admin/api/providers', form),
+    mutationFn: () => createProvider(form),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['providers'] }); setShowCreate(false); },
+    onError: (error) => setFormError(apiError(error)),
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.delete(`/admin/api/providers/${id}`),
+    mutationFn: deleteProvider,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['providers'] }),
+    onError: (error) => setFormError(apiError(error)),
   });
 
   if (isLoading) return <div className="space-y-4"><Skeleton className="h-8 w-48" /><Skeleton className="h-64 w-full" /></div>;
@@ -51,7 +54,7 @@ export function ProviderListPage() {
         />
       )}
 
-      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Add Provider">
+      <Modal open={showCreate} onClose={() => { setShowCreate(false); setFormError(''); }} title="Add Provider">
         <div className="space-y-3">
           <input className="w-full px-3 py-2 rounded-lg border border-surface-200 text-sm" placeholder="Provider ID (e.g. openai-east)" value={form.id} onChange={e => setForm({ ...form, id: e.target.value })} />
           <select className="w-full px-3 py-2 rounded-lg border border-surface-200 text-sm" value={form.kind} onChange={e => setForm({ ...form, kind: e.target.value })}>
@@ -61,6 +64,7 @@ export function ProviderListPage() {
           </select>
           <input className="w-full px-3 py-2 rounded-lg border border-surface-200 text-sm" placeholder="Base URL (e.g. https://api.openai.com/v1)" value={form.base_url} onChange={e => setForm({ ...form, base_url: e.target.value })} />
           <input className="w-full px-3 py-2 rounded-lg border border-surface-200 text-sm" placeholder="Pool ID" value={form.pool_id} onChange={e => setForm({ ...form, pool_id: e.target.value })} />
+          {formError && <p className="text-sm text-red-600">{formError}</p>}
           <div className="flex gap-2 justify-end pt-2">
             <Button variant="secondary" onClick={() => setShowCreate(false)}>Cancel</Button>
             <Button onClick={() => createMutation.mutate()} loading={createMutation.isPending}>Create</Button>

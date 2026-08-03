@@ -47,7 +47,7 @@ pub async fn cost_drilldown_handler(
     State(state): State<crate::server::AppState>,
     Query(q): Query<DrilldownQuery>,
 ) -> Result<axum::response::Response, AppError> {
-    let pricing = state.config.pricing.clone();
+    let pricing = state.config_store.pricing().await;
     let (stats, chart) = query_drilldown(&state.db, &pricing, &q.model, &q.tenant).await?;
 
     Ok(Json(DrilldownResponse {
@@ -131,7 +131,8 @@ async fn query_drilldown(
     let total_cached: i64 = hourly.values().map(|v| v.4).sum();
     let total_latency: i64 = hourly.values().map(|v| v.5).sum();
 
-    let price = pricing.lookup(model, tenant.as_deref());
+    let accounting = pricing.accounting();
+    let price = accounting.lookup(model, tenant.as_deref());
     let prompt_price = price.prompt;
     let completion_price = price.completion;
     let total_cost = if prompt_price > 0.0 || completion_price > 0.0 {

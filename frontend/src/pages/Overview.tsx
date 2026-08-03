@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { Activity, Zap, AlertTriangle, TrendingUp, Server, Radio } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { fetchStatus, fetchTraffic, fetchAlerts, fetchKeys } from '@/lib/api';
+import { fetchStatus, fetchTraffic, fetchAlerts, fetchKeys, fetchCost } from '@/lib/api';
 import { formatNum } from '@/lib/utils';
 import { useLocale } from '@/i18n/context';
 

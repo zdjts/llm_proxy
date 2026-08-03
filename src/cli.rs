@@ -261,9 +261,9 @@ mod cli_impl {
             }
 
             Commands::Reload => {
-                println!("Send SIGHUP to the gateway process to reload config.");
-                println!("Find PID with:  pgrep llm_proxy");
-                println!("Then:           kill -HUP <pid>");
+                let url = format!("{}/admin/api/config/refresh", cli.base_url);
+                let body = do_post(&url, "{}")?;
+                println!("{body}");
             }
 
             Commands::Alerts => {

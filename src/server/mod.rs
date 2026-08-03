@@ -8,7 +8,7 @@ pub mod middleware;
 
 use std::sync::Arc;
 
-use axum::Router;
+use axum::{Router, response::IntoResponse};
 use dashmap::DashMap;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
@@ -22,12 +22,14 @@ use crate::concurrency::ConcurrencyLimiter;
 use crate::config::Config;
 use crate::config_store::ConfigStore;
 use crate::metrics::Metrics;
+use crate::model_catalog::ModelCatalog;
 use crate::rbac::middleware::RbacState;
 use crate::router::RouterHandle;
 
 #[derive(Clone)]
 pub struct AppState {
     pub router: RouterHandle,
+    pub catalog: ModelCatalog,
     pub db: sqlx::SqlitePool,
     pub config: Arc<Config>,
     pub cache: PromptCache,
@@ -44,7 +46,7 @@ pub struct AppState {
     /// v3.0: RBAC state (Fix 1). None when RBAC is not configured.
     pub rbac_state: Option<RbacState>,
     /// v4.0 Track H: DB-backed config store for hot-reload and admin CRUD.
-    pub config_store: Option<Arc<ConfigStore>>,
+    pub config_store: Arc<ConfigStore>,
     /// v4.0 Track I: Budget manager for spend tracking.
     pub budget_manager: Option<Arc<BudgetManager>>,
 }
@@ -67,6 +69,10 @@ pub fn build_router(
             axum::routing::post(handler::chat_completions_handler),
         )
         .route("/v1/models", axum::routing::get(handler::models_handler))
+        .route(
+            "/v1/model-metadata",
+            axum::routing::get(handler::model_metadata_handler),
+        )
         .route(
             "/metrics",
             axum::routing::get(crate::metrics::metrics_handler),
@@ -125,6 +131,50 @@ pub fn build_router(
         .with_state(state)
 }
 
+async fn config_rbac_guard(
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, axum::response::Response> {
+    let path = request.uri().path();
+    let permission = if path.starts_with("/api/client-keys") {
+        crate::rbac::permissions::Permission::KEYS_MANAGE
+    } else if path.starts_with("/api/models") || path.starts_with("/api/providers") {
+        crate::rbac::permissions::Permission::PROVIDERS_MANAGE
+    } else if path.starts_with("/api/pools") {
+        crate::rbac::permissions::Permission::KEYS_MANAGE
+    } else if path.starts_with("/api/routing") {
+        crate::rbac::permissions::Permission::ROUTING_EDIT
+    } else if path == "/api/config/validate" || path == "/api/config" {
+        crate::rbac::permissions::Permission::AUDIT_VIEW
+    } else if path == "/api/config/export" {
+        // Config export contains plaintext upstream keys and is therefore an
+        // administrative configuration operation, not an audit read.
+        crate::rbac::permissions::Permission::PROVIDERS_MANAGE
+    } else if path == "/api/config/import" || path == "/api/config/refresh" {
+        crate::rbac::permissions::Permission::PROVIDERS_MANAGE
+    } else {
+        return Ok(next.run(request).await);
+    };
+    let user = request
+        .extensions()
+        .get::<crate::rbac::AuthenticatedUser>()
+        .ok_or_else(|| {
+            (
+                axum::http::StatusCode::UNAUTHORIZED,
+                "Authentication required",
+            )
+                .into_response()
+        })?;
+    if !user.can(permission) {
+        return Err((
+            axum::http::StatusCode::FORBIDDEN,
+            format!("Permission '{permission}' required"),
+        )
+            .into_response());
+    }
+    Ok(next.run(request).await)
+}
+
 fn build_admin_routes(state: AppState, allowed_ips: Vec<String>) -> Router<AppState> {
     let admin = Router::new()
         // User CRUD (T193) — protected by IP guard + RBAC
@@ -175,8 +225,33 @@ fn build_admin_routes(state: AppState, allowed_ips: Vec<String>) -> Router<AppSt
             axum::routing::get(crate::dashboard::admin_api::admin_api_keys),
         )
         .route(
-            "/api/reload",
-            axum::routing::post(crate::dashboard::admin_api::admin_api_reload),
+            "/api/config",
+            axum::routing::get(crate::dashboard::admin_api::admin_api_config_overview),
+        )
+        .route(
+            "/api/config/export",
+            axum::routing::get(crate::dashboard::admin_api::admin_api_config_export),
+        )
+        .route(
+            "/api/config/validate",
+            axum::routing::post(crate::dashboard::admin_api::admin_api_config_validate),
+        )
+        .route(
+            "/api/config/import",
+            axum::routing::post(crate::dashboard::admin_api::admin_api_config_import),
+        )
+        .route(
+            "/api/config/refresh",
+            axum::routing::post(crate::dashboard::admin_api::admin_api_config_refresh),
+        )
+        .route(
+            "/api/models",
+            axum::routing::get(crate::dashboard::admin_api::admin_api_models)
+                .post(crate::dashboard::admin_api::admin_api_create_model),
+        )
+        .route(
+            "/api/models/{model_id}",
+            axum::routing::patch(crate::dashboard::admin_api::admin_api_update_model),
         )
         .route(
             "/api/client-keys",
@@ -245,16 +320,6 @@ fn build_admin_routes(state: AppState, allowed_ips: Vec<String>) -> Router<AppSt
         )
         // ── v4.1 Audit-25 Fix: Stub endpoints for pending tracks ──
         .route(
-            "/api/models",
-            axum::routing::get(crate::dashboard::stub_api::models_list)
-                .post(crate::dashboard::stub_api::models_create),
-        )
-        .route(
-            "/api/models/{model_id}",
-            axum::routing::patch(crate::dashboard::stub_api::models_update)
-                .delete(crate::dashboard::stub_api::models_delete),
-        )
-        .route(
             "/api/routing/simulate",
             axum::routing::post(crate::dashboard::stub_api::routing_simulate),
         )
@@ -318,8 +383,7 @@ fn build_admin_routes(state: AppState, allowed_ips: Vec<String>) -> Router<AppSt
         }))
         .fallback_service(ServeDir::new("frontend/dist"));
 
-    // ── v3.0 (Fix 1): RBAC authentication layer ──
-    let mut admin = admin;
+    let mut admin = admin.route_layer(axum::middleware::from_fn(config_rbac_guard));
     let maybe_rbac = state.rbac_state.clone();
     if let Some(rbac_state) = maybe_rbac {
         admin = admin.route_layer(axum::middleware::from_fn_with_state(

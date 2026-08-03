@@ -1,17 +1,8 @@
-//! DB-backed configuration store with hot-reload (v4.0 Track H — T174).
+//! DB-backed configuration store.
 //!
-//! Replaces direct reads of `config.providers`, `config.pools`, and
-//! `config.model_to_pool` from YAML with a DB-backed, polling-refreshed
-//! in-memory cache. See `docs/adr-016-config-as-data.md`.
-//!
-//! # Lifecycle
-//!
-//! 1. `ConfigStore::load()` — syncs the Managed sections (`pools`, `providers`,
-//!    `model_to_pool`) from YAML into the DB, then loads the DB into the cache.
-//!    `config.yaml` is authoritative at boot: editing it and restarting applies
-//!    the change.
-//! 2. `spawn_config_poller()` — background task polls DB every N seconds,
-//!    atomically swapping the in-memory cache when changes are detected.
+//! SQLite is the authoritative source for managed runtime configuration. YAML is
+//! accepted only through the explicit validation/import pipeline; startup and the
+//! background poller never write YAML values to the database.
 //!
 //! # Terminology (per ADR-016)
 //!
@@ -28,165 +19,207 @@ use tokio::sync::RwLock;
 use tracing;
 
 use crate::config::{
-    KeyEntry, ModelRouting, PoolConfig, PoolStrategy, ProviderConfig, ProviderKind,
+    AlertConfig, FailoverConfig, KeyEntry, ModelMetadataConfig, ModelRouting, PoolConfig,
+    PoolStrategy, ProviderConfig, ProviderKind,
 };
 use crate::error::AppError;
 
 // ── In-memory config snapshots ──
 
-/// Full snapshot of all managed configuration sections.
+#[derive(Debug, Clone)]
+pub struct ModelRegistryEntry {
+    pub id: String,
+    pub display_name: String,
+    pub provider_kind: String,
+    pub provider_config_id: Option<String>,
+    pub supports_vision: bool,
+    pub supports_tool_calling: bool,
+    pub supports_json_mode: bool,
+    pub max_context_tokens: i32,
+    pub max_output_tokens: i32,
+    pub input_price_per_1m: Option<f64>,
+    pub output_price_per_1m: Option<f64>,
+    pub capabilities_json: Option<String>,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimePolicy {
+    pub failover: FailoverConfig,
+    pub alerts: AlertConfig,
+    pub cache_max_entries: usize,
+}
+
+impl Default for RuntimePolicy {
+    fn default() -> Self {
+        Self {
+            failover: FailoverConfig {
+                enabled: true,
+                bad_status_codes: vec![401, 402, 403, 429],
+                max_retries: 1,
+                probe_interval_secs: 60,
+                probe_timeout_secs: 10,
+                max_probe_retries: 3,
+            },
+            alerts: AlertConfig::default(),
+            cache_max_entries: 256,
+        }
+    }
+}
+
 /// Every field is behind `Arc` so readers get a consistent view without
 /// holding a lock across `.await`.
 #[derive(Debug, Clone)]
-pub struct ManagedConfig {
+pub struct ConfigSnapshot {
     pub providers: Arc<Vec<ProviderConfig>>,
     pub pool_configs: Arc<HashMap<String, PoolConfig>>,
     pub model_routing: Arc<HashMap<String, ModelRouting>>,
-    /// v4.0 AUDIT-14 Fix: model_registry loaded from DB (capabilities + pricing).
-    pub model_registry: Arc<Vec<serde_json::Value>>,
-    /// v4.0 AUDIT-14 Fix: shadow_route loaded from DB (not yet wired into router).
-    pub shadow_routes: Arc<Vec<serde_json::Value>>,
+    pub model_registry: Arc<Vec<ModelRegistryEntry>>,
+    pub model_metadata: Arc<ModelMetadataConfig>,
+    /// Pricing is a bootstrap/static carrier until a DB pricing table exists.
+    /// It is shared by request accounting and dashboard cost views.
+    pub pricing: Arc<crate::config::pricing::PricingConfig>,
+    pub runtime: Arc<RuntimePolicy>,
     pub version: u64,
 }
 
-impl Default for ManagedConfig {
+impl Default for ConfigSnapshot {
     fn default() -> Self {
         Self {
             providers: Arc::new(Vec::new()),
             pool_configs: Arc::new(HashMap::new()),
             model_routing: Arc::new(HashMap::new()),
             model_registry: Arc::new(Vec::new()),
-            shadow_routes: Arc::new(Vec::new()),
+            model_metadata: Arc::new(ModelMetadataConfig::default()),
+            pricing: Arc::new(crate::config::pricing::PricingConfig::default()),
+            runtime: Arc::new(RuntimePolicy::default()),
             version: 0,
         }
     }
 }
-
-// ── ConfigStore ──
 
 /// Central store for DB-managed configuration.
 ///
 /// All public methods return clones of `Arc`-wrapped data, so callers
 /// never hold the lock across I/O.
 pub struct ConfigStore {
-    inner: RwLock<ManagedConfig>,
+    inner: RwLock<ConfigSnapshot>,
     db: SqlitePool,
 }
 
 impl ConfigStore {
-    /// Create a new ConfigStore and load initial data from the DB.
+    /// Construct an in-memory store for unit and HTTP fixture tests.
+    pub fn for_test(db: SqlitePool, model_metadata: ModelMetadataConfig) -> Self {
+        Self {
+            inner: RwLock::new(ConfigSnapshot {
+                model_metadata: Arc::new(model_metadata),
+                ..Default::default()
+            }),
+            db,
+        }
+    }
+
+    pub async fn set_bootstrap_pricing(&self, pricing: crate::config::pricing::PricingConfig) {
+        self.inner.write().await.pricing = Arc::new(pricing);
+    }
+
+    pub async fn pricing(&self) -> Arc<crate::config::pricing::PricingConfig> {
+        self.inner.read().await.pricing.clone()
+    }
+
+    pub async fn set_bootstrap_model_metadata(&self, metadata: ModelMetadataConfig) {
+        self.inner.write().await.model_metadata = Arc::new(metadata);
+    }
+
+    pub async fn set_bootstrap_runtime(&self, runtime: RuntimePolicy) {
+        self.inner.write().await.runtime = Arc::new(runtime);
+    }
+
+    pub async fn runtime(&self) -> Arc<RuntimePolicy> {
+        self.inner.read().await.runtime.clone()
+    }
+
     ///
-    /// `config.yaml` is authoritative at boot: the Managed sections
-    /// (`pools`, `providers`, `model_to_pool`) are synced into the DB on every
-    /// startup, then the in-memory cache is loaded from the DB.
-    pub async fn load(
-        db: SqlitePool,
-        yaml_config: &crate::config::Config,
-    ) -> Result<Self, AppError> {
+    /// Restarting the process must not overwrite administrator changes in the
+    /// database with values from a YAML file.
+    pub async fn load(db: SqlitePool) -> Result<Self, AppError> {
         let store = Self {
-            inner: RwLock::new(ManagedConfig::default()),
+            inner: RwLock::new(ConfigSnapshot::default()),
             db,
         };
-
-        store.sync_from_yaml(yaml_config).await?;
         store.refresh_from_db().await?;
-
         Ok(store)
     }
 
-    /// Sync the Managed sections from `config.yaml` into the DB.
-    ///
-    /// Runs on every startup so editing YAML and restarting takes effect.
-    /// Entities the YAML defines are upserted (YAML wins); entities added later
-    /// through the Admin API and absent from YAML are left untouched.
-    async fn sync_from_yaml(&self, yaml_config: &crate::config::Config) -> Result<(), AppError> {
-        // Pools → key_pool + key_entry (keys are replaced wholesale per pool)
-        for (pool_id, pool_cfg) in &yaml_config.pools {
-            sqlx::query(
-                "INSERT INTO key_pool (id, strategy, enabled) VALUES (?1, ?2, 1) \
-                 ON CONFLICT(id) DO UPDATE SET strategy = excluded.strategy, enabled = 1",
-            )
-            .bind(pool_id)
-            .bind(match pool_cfg.strategy {
-                PoolStrategy::WeightedRandom => "weighted_random",
-            })
-            .execute(&self.db)
-            .await
-            .map_err(|e| AppError::Internal(format!("ConfigStore sync pool: {e}")))?;
+    /// Parse and validate a YAML document without changing active state.
+    pub fn validate_yaml(yaml: &str) -> Result<crate::config::Config, AppError> {
+        let config: crate::config::Config = serde_yaml::from_str(yaml)
+            .map_err(|e| AppError::Config(format!("Failed to parse import document: {e}")))?;
+        config.validate()?;
+        Ok(config)
+    }
 
+    /// Import a YAML document atomically, refreshing the active snapshot only
+    /// after the database transaction has committed.
+    pub async fn import_yaml(&self, yaml: &str) -> Result<(), AppError> {
+        let config = Self::validate_yaml(yaml)?;
+        let mut tx = self.db.begin().await.map_err(|e| {
+            AppError::Internal(format!("ConfigStore begin import transaction: {e}"))
+        })?;
+        for (pool_id, pool_cfg) in &config.pools {
+            sqlx::query("INSERT INTO key_pool (id, strategy, enabled) VALUES (?1, ?2, 1) ON CONFLICT(id) DO UPDATE SET strategy = excluded.strategy, enabled = 1")
+                .bind(pool_id).bind(match pool_cfg.strategy { PoolStrategy::WeightedRandom => "weighted_random" })
+                .execute(&mut *tx).await.map_err(|e| AppError::Internal(format!("ConfigStore import pool: {e}")))?;
             sqlx::query("DELETE FROM key_entry WHERE pool_id = ?1")
                 .bind(pool_id)
-                .execute(&self.db)
+                .execute(&mut *tx)
                 .await
-                .map_err(|e| AppError::Internal(format!("ConfigStore sync pool keys: {e}")))?;
-
+                .map_err(|e| AppError::Internal(format!("ConfigStore import pool keys: {e}")))?;
             for key_entry in &pool_cfg.keys {
                 let kh = crate::db::compute_key_hash(&key_entry.key);
-                sqlx::query(
-                    "INSERT INTO key_entry (pool_id, key_hash, key_plain, weight, enabled) \
-                     VALUES (?1, ?2, ?3, ?4, 1)",
-                )
-                .bind(pool_id)
-                .bind(&kh)
-                .bind(&key_entry.key)
-                .bind(key_entry.weight as i64)
-                .execute(&self.db)
-                .await
-                .map_err(|e| AppError::Internal(format!("ConfigStore sync key: {e}")))?;
+                sqlx::query("INSERT INTO key_entry (pool_id, key_hash, key_plain, weight, enabled) VALUES (?1, ?2, ?3, ?4, 1)")
+                    .bind(pool_id).bind(kh).bind(&key_entry.key).bind(key_entry.weight as i64)
+                    .execute(&mut *tx).await.map_err(|e| AppError::Internal(format!("ConfigStore import key: {e}")))?;
             }
         }
-
-        // Providers → provider_config (upsert; weight / bad_status_codes_override preserved)
-        for provider in &yaml_config.providers {
-            let kind_str = provider_kind_to_str(&provider.kind);
-            sqlx::query(
-                "INSERT INTO provider_config (id, kind, base_url, pool_id, enabled, metadata) \
-                 VALUES (?1, ?2, ?3, ?4, 1, ?5) \
-                 ON CONFLICT(id) DO UPDATE SET kind = excluded.kind, \
-                 base_url = excluded.base_url, pool_id = excluded.pool_id, \
-                 enabled = 1, metadata = excluded.metadata",
-            )
-            .bind(&provider.id)
-            .bind(kind_str)
-            .bind(&provider.base_url)
-            .bind(&provider.pool_id)
-            .bind(serde_json::to_string(&provider.metadata).unwrap_or_default())
-            .execute(&self.db)
-            .await
-            .map_err(|e| AppError::Internal(format!("ConfigStore sync provider: {e}")))?;
+        for provider in &config.providers {
+            let mut metadata = provider.metadata.clone();
+            if !metadata.is_object() {
+                metadata = serde_json::json!({});
+            }
+            if let Some(object) = metadata.as_object_mut() {
+                if let Some(api_version) = &provider.api_version {
+                    object.insert(
+                        "api_version".into(),
+                        serde_json::Value::String(api_version.clone()),
+                    );
+                }
+                if let Some(region) = &provider.region {
+                    object.insert("region".into(), serde_json::Value::String(region.clone()));
+                }
+            }
+            sqlx::query("INSERT INTO provider_config (id, kind, base_url, pool_id, enabled, metadata) VALUES (?1, ?2, ?3, ?4, 1, ?5) ON CONFLICT(id) DO UPDATE SET kind = excluded.kind, base_url = excluded.base_url, pool_id = excluded.pool_id, enabled = 1, metadata = excluded.metadata")
+                .bind(&provider.id).bind(provider_kind_to_str(&provider.kind)).bind(&provider.base_url)
+                .bind(&provider.pool_id).bind(serde_json::to_string(&metadata).unwrap_or_default())
+                .execute(&mut *tx).await.map_err(|e| AppError::Internal(format!("ConfigStore import provider: {e}")))?;
         }
-
-        // model_to_pool → routing_config (replace per logical model)
-        for (model, routing) in &yaml_config.model_to_pool {
-            let pool_id = routing.pool_id();
-            let default_params = routing
+        for (model, routing) in &config.model_to_pool {
+            let params = routing
                 .default_params()
                 .map(|v| serde_json::to_string(v).unwrap_or_default());
             sqlx::query("DELETE FROM routing_config WHERE logical_model = ?1")
                 .bind(model)
-                .execute(&self.db)
+                .execute(&mut *tx)
                 .await
-                .map_err(|e| AppError::Internal(format!("ConfigStore sync routing: {e}")))?;
-            sqlx::query(
-                "INSERT INTO routing_config (logical_model, pool_id, default_params, enabled) \
-                 VALUES (?1, ?2, ?3, 1)",
-            )
-            .bind(model)
-            .bind(pool_id)
-            .bind(default_params.as_deref())
-            .execute(&self.db)
-            .await
-            .map_err(|e| AppError::Internal(format!("ConfigStore sync routing: {e}")))?;
+                .map_err(|e| AppError::Internal(format!("ConfigStore import routing: {e}")))?;
+            sqlx::query("INSERT INTO routing_config (logical_model, pool_id, default_params, enabled) VALUES (?1, ?2, ?3, 1)")
+                .bind(model).bind(routing.pool_id()).bind(params.as_deref()).execute(&mut *tx).await
+                .map_err(|e| AppError::Internal(format!("ConfigStore import routing: {e}")))?;
         }
-
-        tracing::info!(
-            pools = yaml_config.pools.len(),
-            providers = yaml_config.providers.len(),
-            models = yaml_config.model_to_pool.len(),
-            "ConfigStore: synced managed config from config.yaml into DB"
-        );
-
-        Ok(())
+        tx.commit()
+            .await
+            .map_err(|e| AppError::Internal(format!("ConfigStore commit import: {e}")))?;
+        self.refresh_from_db().await
     }
 
     /// Refresh the in-memory cache from DB tables.
@@ -197,14 +230,12 @@ impl ConfigStore {
         let pool_configs = self.load_pools_from_db().await?;
         let model_routing = self.load_routing_from_db().await?;
         let model_registry = self.load_model_registry_from_db().await?;
-        let shadow_routes = self.load_shadow_routes_from_db().await?;
 
         let mut current = self.inner.write().await;
         current.providers = Arc::new(providers);
         current.pool_configs = Arc::new(pool_configs);
         current.model_routing = Arc::new(model_routing);
         current.model_registry = Arc::new(model_registry);
-        current.shadow_routes = Arc::new(shadow_routes);
         current.version += 1;
 
         tracing::debug!(version = current.version, "ConfigStore: cache refreshed");
@@ -232,21 +263,31 @@ impl ConfigStore {
         .await
         .map_err(|e| AppError::Internal(format!("ConfigStore load providers: {e}")))?;
 
-        Ok(rows
-            .into_iter()
-            .map(|r| ProviderConfig {
-                id: r.id,
-                kind: str_to_provider_kind(&r.kind),
-                base_url: r.base_url,
-                pool_id: r.pool_id,
-                api_version: None, // will be extracted from metadata JSON
-                region: None,      // will be extracted from metadata JSON
-                metadata: r
+        rows.into_iter()
+            .map(|r| {
+                let metadata = r
                     .metadata
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default(),
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                    .unwrap_or_else(|| serde_json::json!({}));
+                let api_version = metadata
+                    .get("api_version")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned);
+                let region = metadata
+                    .get("region")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned);
+                Ok(ProviderConfig {
+                    id: r.id,
+                    kind: str_to_provider_kind(&r.kind)?,
+                    base_url: r.base_url,
+                    pool_id: r.pool_id,
+                    api_version,
+                    region,
+                    metadata,
+                })
             })
-            .collect())
+            .collect()
     }
 
     async fn load_pools_from_db(&self) -> Result<HashMap<String, PoolConfig>, AppError> {
@@ -340,7 +381,7 @@ impl ConfigStore {
     }
 
     /// AUDIT-14 Fix: Load model_registry table from DB.
-    async fn load_model_registry_from_db(&self) -> Result<Vec<serde_json::Value>, AppError> {
+    async fn load_model_registry_from_db(&self) -> Result<Vec<ModelRegistryEntry>, AppError> {
         #[derive(sqlx::FromRow)]
         struct ModelRow {
             id: String,
@@ -352,70 +393,38 @@ impl ConfigStore {
             supports_json_mode: i32,
             max_context_tokens: i32,
             max_output_tokens: i32,
+            input_price_per_1m: Option<f64>,
+            output_price_per_1m: Option<f64>,
+            capabilities_json: Option<String>,
+            enabled: i32,
         }
 
         let rows: Vec<ModelRow> = sqlx::query_as(
             "SELECT id, display_name, provider_kind, provider_config_id, \
              supports_vision, supports_tool_calling, supports_json_mode, \
-             max_context_tokens, max_output_tokens \
-             FROM model_registry WHERE enabled = 1",
+             max_context_tokens, max_output_tokens, input_price_per_1m, output_price_per_1m, capabilities_json, enabled \
+             FROM model_registry",
         )
         .fetch_all(&self.db)
         .await
         .map_err(|e| AppError::Internal(format!("ConfigStore load model_registry: {e}")))?;
 
-        let result: Vec<serde_json::Value> = rows
+        let result: Vec<ModelRegistryEntry> = rows
             .into_iter()
-            .map(|r| {
-                serde_json::json!({
-                    "id": r.id,
-                    "display_name": r.display_name,
-                    "provider_kind": r.provider_kind,
-                    "provider_config_id": r.provider_config_id,
-                    "supports_vision": r.supports_vision != 0,
-                    "supports_tool_calling": r.supports_tool_calling != 0,
-                    "supports_json_mode": r.supports_json_mode != 0,
-                    "max_context_tokens": r.max_context_tokens,
-                    "max_output_tokens": r.max_output_tokens,
-                })
-            })
-            .collect();
-        Ok(result)
-    }
-
-    /// AUDIT-14 Fix: Load shadow_route table from DB.
-    ///
-    /// NOTE: shadow_route data is loaded into ConfigStore cache but not yet
-    /// wired into the Router's request path. Shadow routing integration is
-    /// tracked for a future Track. See AUDIT-14.
-    async fn load_shadow_routes_from_db(&self) -> Result<Vec<serde_json::Value>, AppError> {
-        #[derive(sqlx::FromRow)]
-        struct ShadowRow {
-            id: i32,
-            logical_model: String,
-            primary_physical: String,
-            shadow_physical: String,
-            shadow_ratio: f64,
-        }
-
-        let rows: Vec<ShadowRow> = sqlx::query_as(
-            "SELECT id, logical_model, primary_physical, shadow_physical, \
-             shadow_ratio FROM shadow_route WHERE enabled = 1",
-        )
-        .fetch_all(&self.db)
-        .await
-        .map_err(|e| AppError::Internal(format!("ConfigStore load shadow_route: {e}")))?;
-
-        let result: Vec<serde_json::Value> = rows
-            .into_iter()
-            .map(|r| {
-                serde_json::json!({
-                    "id": r.id,
-                    "logical_model": r.logical_model,
-                    "primary_physical": r.primary_physical,
-                    "shadow_physical": r.shadow_physical,
-                    "shadow_ratio": r.shadow_ratio,
-                })
+            .map(|r| ModelRegistryEntry {
+                id: r.id,
+                display_name: r.display_name,
+                provider_kind: r.provider_kind,
+                provider_config_id: r.provider_config_id,
+                supports_vision: r.supports_vision != 0,
+                supports_tool_calling: r.supports_tool_calling != 0,
+                supports_json_mode: r.supports_json_mode != 0,
+                max_context_tokens: r.max_context_tokens,
+                max_output_tokens: r.max_output_tokens,
+                input_price_per_1m: r.input_price_per_1m,
+                output_price_per_1m: r.output_price_per_1m,
+                capabilities_json: r.capabilities_json,
+                enabled: r.enabled != 0,
             })
             .collect();
         Ok(result)
@@ -423,31 +432,14 @@ impl ConfigStore {
 
     // ── Public accessors (return Arc clones, no lock held across .await) ──
 
-    /// Get current provider configs.
-    pub async fn get_providers(&self) -> Arc<Vec<ProviderConfig>> {
-        Arc::clone(&self.inner.read().await.providers)
+    pub async fn snapshot(&self) -> ConfigSnapshot {
+        self.inner.read().await.clone()
     }
 
-    /// Get current pool configs.
-    pub async fn get_pools(&self) -> Arc<HashMap<String, PoolConfig>> {
-        Arc::clone(&self.inner.read().await.pool_configs)
+    /// Replace the static YAML metadata projection after a successful reload.
+    pub async fn update_model_metadata(&self, metadata: ModelMetadataConfig) {
+        self.inner.write().await.model_metadata = Arc::new(metadata);
     }
-
-    /// Get current model routing.
-    pub async fn get_model_routing(&self) -> Arc<HashMap<String, ModelRouting>> {
-        Arc::clone(&self.inner.read().await.model_routing)
-    }
-
-    /// Get current model registry entries (AUDIT-14 Fix).
-    pub async fn get_model_registry(&self) -> Arc<Vec<serde_json::Value>> {
-        Arc::clone(&self.inner.read().await.model_registry)
-    }
-
-    /// Get current shadow routes (AUDIT-14 Fix — not yet wired into Router).
-    pub async fn get_shadow_routes(&self) -> Arc<Vec<serde_json::Value>> {
-        Arc::clone(&self.inner.read().await.shadow_routes)
-    }
-
     /// Get the current config version (monotonically increasing).
     pub async fn version(&self) -> u64 {
         self.inner.read().await.version
@@ -508,21 +500,20 @@ fn provider_kind_to_str(kind: &ProviderKind) -> &'static str {
     }
 }
 
-fn str_to_provider_kind(s: &str) -> ProviderKind {
+fn str_to_provider_kind(s: &str) -> Result<ProviderKind, AppError> {
     match s {
-        "openai" => ProviderKind::OpenAi,
-        "anthropic" => ProviderKind::Anthropic,
-        "gemini" => ProviderKind::Gemini,
-        "azure" => ProviderKind::Azure,
-        "bedrock" => ProviderKind::Bedrock,
-        "cohere" => ProviderKind::Cohere,
-        "mistral" => ProviderKind::Mistral,
-        "ollama" => ProviderKind::Ollama,
-        "vllm" => ProviderKind::Vllm,
-        _ => {
-            tracing::warn!(kind = %s, "ConfigStore: unknown provider kind, defaulting to openai");
-            ProviderKind::OpenAi
-        }
+        "openai" => Ok(ProviderKind::OpenAi),
+        "anthropic" => Ok(ProviderKind::Anthropic),
+        "gemini" => Ok(ProviderKind::Gemini),
+        "azure" => Ok(ProviderKind::Azure),
+        "bedrock" => Ok(ProviderKind::Bedrock),
+        "cohere" => Ok(ProviderKind::Cohere),
+        "mistral" => Ok(ProviderKind::Mistral),
+        "ollama" => Ok(ProviderKind::Ollama),
+        "vllm" => Ok(ProviderKind::Vllm),
+        other => Err(AppError::Config(format!(
+            "Unsupported provider kind '{other}'"
+        ))),
     }
 }
 
@@ -552,167 +543,87 @@ mod tests {
         (pool, dir)
     }
 
-    fn minimal_yaml_config() -> crate::config::Config {
-        crate::config::Config {
-            server: crate::config::ServerConfig {
-                host: "127.0.0.1".into(),
-                port: 4000,
-                max_body_bytes: 10485760,
-            },
-            auth: crate::config::AuthConfig {
-                client_keys: vec![],
-            },
-            db: crate::config::DbConfig {
-                path: "./test.db".into(),
-            },
-            failover: crate::config::FailoverConfig {
-                enabled: true,
-                bad_status_codes: vec![401, 402, 403, 429],
-                max_retries: 1,
-                probe_interval_secs: 60,
-                probe_timeout_secs: 10,
-                max_probe_retries: 3,
-            },
-            pools: {
-                let mut m = HashMap::new();
-                m.insert(
-                    "test_pool".into(),
-                    PoolConfig {
-                        keys: vec![KeyEntry {
-                            key: "sk-test-abc".into(),
-                            weight: 1,
-                        }],
-                        strategy: PoolStrategy::WeightedRandom,
-                    },
-                );
-                m
-            },
-            providers: vec![ProviderConfig {
-                id: "test_provider".into(),
-                pool_id: "test_pool".into(),
-                base_url: "https://api.test.com/v1".into(),
-                kind: ProviderKind::OpenAi,
-                api_version: None,
-                region: None,
-                metadata: serde_json::Value::Null,
-            }],
-            model_to_pool: {
-                let mut m = HashMap::new();
-                m.insert(
-                    "test-model".into(),
-                    ModelRouting::Simple("test_pool".into()),
-                );
-                m
-            },
-            bootstrap_admin: Default::default(),
-            admin: Default::default(),
-            pricing: Default::default(),
-            rate_limit: Default::default(),
-            cache_max_entries: 256,
-            alerts: Default::default(),
-            acl: Default::default(),
-            fallback_models: Default::default(),
-            concurrency: Default::default(),
-        }
+    fn test_yaml_document() -> &'static str {
+        "server:\n  host: 127.0.0.1\n  port: 4000\nauth:\n  client_keys: []\ndb:\n  path: ./test.db\nfailover:\n  enabled: true\npools:\n  test_pool:\n    keys:\n      - key: sk-test-abc\n        weight: 1\nproviders:\n  - id: test_provider\n    pool_id: test_pool\n    base_url: https://api.test.com/v1\nmodel_to_pool:\n  test-model: test_pool\n"
     }
 
     #[tokio::test]
-    async fn it_imports_once_from_yaml() {
-        let (pool, _dir) = setup_test_db().await;
-        let yaml_cfg = minimal_yaml_config();
-
-        let store = ConfigStore::load(pool, &yaml_cfg).await.unwrap();
-
-        let providers = store.get_providers().await;
-        assert_eq!(providers.len(), 1);
-        assert_eq!(providers[0].id, "test_provider");
-
-        let pools = store.get_pools().await;
-        assert!(pools.contains_key("test_pool"));
-        assert_eq!(pools["test_pool"].keys.len(), 1);
-
-        let routing = store.get_model_routing().await;
-        assert_eq!(routing["test-model"].pool_id(), "test_pool");
-
-        assert!(store.version().await > 0);
+    async fn model_metadata_updates_in_store_snapshot() {
+        let db = sqlx::SqlitePool::connect_lazy("sqlite::memory:").unwrap();
+        let store = ConfigStore::for_test(db, ModelMetadataConfig::default());
+        let mut metadata = ModelMetadataConfig::default();
+        metadata.defaults.context_window = Some(321);
+        store.update_model_metadata(metadata).await;
+        assert_eq!(
+            store
+                .snapshot()
+                .await
+                .model_metadata
+                .defaults
+                .context_window,
+            Some(321)
+        );
     }
-
     #[tokio::test]
-    async fn it_does_not_double_import() {
+    async fn invalid_yaml_import_keeps_database_and_snapshot_unchanged() {
         let (pool, _dir) = setup_test_db().await;
-        let yaml_cfg = minimal_yaml_config();
-
-        // First load: sync from YAML
-        let store = ConfigStore::load(pool.clone(), &yaml_cfg).await.unwrap();
-        assert_eq!(store.get_providers().await.len(), 1);
-
-        // Second load: re-sync is idempotent — no duplicated rows
-        let store2 = ConfigStore::load(pool, &yaml_cfg).await.unwrap();
-        assert_eq!(store2.get_providers().await.len(), 1);
-        assert_eq!(store2.get_pools().await["test_pool"].keys.len(), 1);
-        assert_eq!(store2.get_model_routing().await.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn it_overwrites_db_with_yaml_on_reload() {
-        let (pool, _dir) = setup_test_db().await;
-        let yaml_cfg = minimal_yaml_config();
-        let _store = ConfigStore::load(pool.clone(), &yaml_cfg).await.unwrap();
-
-        // Simulate an Admin-API edit that conflicts with YAML (weight 1 → 9)
-        let kh = crate::db::compute_key_hash("sk-test-abc");
-        sqlx::query("UPDATE key_entry SET weight = 9 WHERE key_hash = ?1")
-            .bind(&kh)
-            .execute(&pool)
+        let store = ConfigStore::load(pool.clone()).await.unwrap();
+        store.import_yaml(test_yaml_document()).await.unwrap();
+        let before_version = store.version().await;
+        let before = store.snapshot().await;
+        let result = store.import_yaml("pools: [not-a-map]").await;
+        assert!(result.is_err());
+        assert_eq!(store.version().await, before_version);
+        assert_eq!(
+            store.snapshot().await.providers.len(),
+            before.providers.len()
+        );
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM provider_config")
+            .fetch_one(&pool)
             .await
             .unwrap();
-
-        // Reload: config.yaml is authoritative at boot, so weight reverts to YAML (1)
-        let store2 = ConfigStore::load(pool, &yaml_cfg).await.unwrap();
-        let pools = store2.get_pools().await;
-        assert_eq!(
-            pools["test_pool"].keys[0].weight, 1,
-            "YAML should win over DB edits on restart"
-        );
+        assert_eq!(count.0, before.providers.len() as i64);
     }
-
     #[tokio::test]
-    async fn it_applies_edited_yaml_on_reload() {
+    async fn import_and_reload_preserve_provider_specific_parameters() {
         let (pool, _dir) = setup_test_db().await;
-        let yaml_cfg = minimal_yaml_config();
-        let _store = ConfigStore::load(pool.clone(), &yaml_cfg).await.unwrap();
+        let store = ConfigStore::load(pool.clone()).await.unwrap();
+        let yaml = "server:\n  host: 127.0.0.1\n  port: 4000\nauth:\n  client_keys: []\ndb:\n  path: ./test.db\nfailover:\n  enabled: true\npools:\n  shared:\n    keys:\n      - key: sk-provider-test\n        weight: 1\nproviders:\n  - id: azure-east\n    kind: azure\n    pool_id: shared\n    base_url: https://azure.example/v1\n    api_version: 2024-02-01\n  - id: bedrock-west\n    kind: bedrock\n    pool_id: shared\n    base_url: https://bedrock.example\n    region: us-west-2\nmodel_to_pool:\n  test-model: shared\n";
+        store.import_yaml(yaml).await.unwrap();
+        let snapshot = store.snapshot().await;
+        let azure = snapshot
+            .providers
+            .iter()
+            .find(|p| p.id == "azure-east")
+            .unwrap();
+        let bedrock = snapshot
+            .providers
+            .iter()
+            .find(|p| p.id == "bedrock-west")
+            .unwrap();
+        assert_eq!(azure.api_version.as_deref(), Some("2024-02-01"));
+        assert_eq!(bedrock.region.as_deref(), Some("us-west-2"));
 
-        // User edits config.yaml: new pool + re-route the model
-        let mut yaml2 = minimal_yaml_config();
-        yaml2.pools.insert(
-            "new_pool".into(),
-            PoolConfig {
-                keys: vec![KeyEntry {
-                    key: "sk-new-abc".into(),
-                    weight: 2,
-                }],
-                strategy: PoolStrategy::WeightedRandom,
-            },
-        );
-        yaml2
-            .model_to_pool
-            .insert("test-model".into(), ModelRouting::Simple("new_pool".into()));
-
-        let store2 = ConfigStore::load(pool, &yaml2).await.unwrap();
-
-        let routing = store2.get_model_routing().await;
-        assert_eq!(routing["test-model"].pool_id(), "new_pool");
-        assert!(store2.get_pools().await.contains_key("new_pool"));
-        assert_eq!(store2.get_pools().await["new_pool"].keys.len(), 1);
+        let reloaded = ConfigStore::load(pool).await.unwrap();
+        let snapshot = reloaded.snapshot().await;
+        let azure = snapshot
+            .providers
+            .iter()
+            .find(|p| p.id == "azure-east")
+            .unwrap();
+        let bedrock = snapshot
+            .providers
+            .iter()
+            .find(|p| p.id == "bedrock-west")
+            .unwrap();
+        assert_eq!(azure.api_version.as_deref(), Some("2024-02-01"));
+        assert_eq!(bedrock.region.as_deref(), Some("us-west-2"));
     }
-
     #[tokio::test]
     async fn it_refreshes_from_db_after_write() {
         let (pool, _dir) = setup_test_db().await;
-        let yaml_cfg = minimal_yaml_config();
-        let store = Arc::new(ConfigStore::load(pool.clone(), &yaml_cfg).await.unwrap());
-
-        // Insert a new provider directly into DB
+        let store = Arc::new(ConfigStore::load(pool.clone()).await.unwrap());
+        store.import_yaml(test_yaml_document()).await.unwrap();
         sqlx::query(
             "INSERT INTO provider_config (id, kind, base_url, pool_id, enabled) \
              VALUES ('new_provider', 'anthropic', 'https://api.anthropic.com/v1', 'test_pool', 1)",
@@ -723,28 +634,14 @@ mod tests {
 
         // Refresh
         store.refresh_from_db().await.unwrap();
-        let providers = store.get_providers().await;
+        let providers = store.snapshot().await.providers;
         assert_eq!(providers.len(), 2);
-    }
-
-    #[tokio::test]
-    async fn it_handles_empty_db_without_yaml_data() {
-        let (pool, _dir) = setup_test_db().await;
-        let mut yaml_cfg = minimal_yaml_config();
-        yaml_cfg.pools.clear();
-        yaml_cfg.providers.clear();
-        yaml_cfg.model_to_pool.clear();
-
-        let store = ConfigStore::load(pool, &yaml_cfg).await.unwrap();
-        assert_eq!(store.get_providers().await.len(), 0);
-        assert_eq!(store.get_pools().await.len(), 0);
     }
 
     #[tokio::test]
     async fn it_handles_refresh_with_no_changes() {
         let (pool, _dir) = setup_test_db().await;
-        let yaml_cfg = minimal_yaml_config();
-        let store = ConfigStore::load(pool, &yaml_cfg).await.unwrap();
+        let store = ConfigStore::load(pool).await.unwrap();
         let v1 = store.version().await;
 
         store.refresh_from_db().await.unwrap();
@@ -760,10 +657,10 @@ mod tests {
     #[tokio::test]
     async fn t177_scenario_1_change_pool_weight() {
         let (pool, _dir) = setup_test_db().await;
-        let yaml_cfg = minimal_yaml_config();
-        let store = Arc::new(ConfigStore::load(pool.clone(), &yaml_cfg).await.unwrap());
+        let store = Arc::new(ConfigStore::load(pool.clone()).await.unwrap());
+        store.import_yaml(test_yaml_document()).await.unwrap();
 
-        let initial_pools = store.get_pools().await;
+        let initial_pools = store.snapshot().await.pool_configs;
         let initial_weight = initial_pools["test_pool"].keys[0].weight;
         assert_eq!(initial_weight, 1);
 
@@ -775,7 +672,7 @@ mod tests {
             .unwrap();
 
         store.refresh_from_db().await.unwrap();
-        let updated_pools = store.get_pools().await;
+        let updated_pools = store.snapshot().await.pool_configs;
         let updated_weight = updated_pools["test_pool"].keys[0].weight;
         assert_eq!(updated_weight, 5, "pool key weight should be hot-reloaded");
     }
@@ -783,10 +680,10 @@ mod tests {
     #[tokio::test]
     async fn t177_scenario_2_disable_provider() {
         let (pool, _dir) = setup_test_db().await;
-        let yaml_cfg = minimal_yaml_config();
-        let store = Arc::new(ConfigStore::load(pool.clone(), &yaml_cfg).await.unwrap());
+        let store = Arc::new(ConfigStore::load(pool.clone()).await.unwrap());
+        store.import_yaml(test_yaml_document()).await.unwrap();
 
-        let providers = store.get_providers().await;
+        let providers = store.snapshot().await.providers;
         assert_eq!(providers.len(), 1);
         assert_eq!(providers[0].id, "test_provider");
 
@@ -796,7 +693,7 @@ mod tests {
             .unwrap();
 
         store.refresh_from_db().await.unwrap();
-        let providers = store.get_providers().await;
+        let providers = store.snapshot().await.providers;
         assert_eq!(
             providers.len(),
             0,
@@ -807,8 +704,8 @@ mod tests {
     #[tokio::test]
     async fn t177_scenario_3_change_model_routing() {
         let (pool, _dir) = setup_test_db().await;
-        let yaml_cfg = minimal_yaml_config();
-        let store = Arc::new(ConfigStore::load(pool.clone(), &yaml_cfg).await.unwrap());
+        let store = Arc::new(ConfigStore::load(pool.clone()).await.unwrap());
+        store.import_yaml(test_yaml_document()).await.unwrap();
 
         sqlx::query("INSERT INTO key_pool (id, strategy) VALUES ('new_pool', 'weighted_random')")
             .execute(&pool)
@@ -829,7 +726,7 @@ mod tests {
         .unwrap();
 
         store.refresh_from_db().await.unwrap();
-        let routing = store.get_model_routing().await;
+        let routing = store.snapshot().await.model_routing;
         assert_eq!(
             routing["test-model"].pool_id(),
             "new_pool",
@@ -840,8 +737,8 @@ mod tests {
     #[tokio::test]
     async fn t177_poller_detects_changes() {
         let (pool, _dir) = setup_test_db().await;
-        let yaml_cfg = minimal_yaml_config();
-        let store = Arc::new(ConfigStore::load(pool.clone(), &yaml_cfg).await.unwrap());
+        let store = Arc::new(ConfigStore::load(pool.clone()).await.unwrap());
+        store.import_yaml(test_yaml_document()).await.unwrap();
 
         let v1 = store.version().await;
 
@@ -856,7 +753,7 @@ mod tests {
         let v2 = store.version().await;
         assert!(v2 > v1, "version should increase after detecting changes");
 
-        let providers = store.get_providers().await;
+        let providers = store.snapshot().await.providers;
         let ids: Vec<&str> = providers.iter().map(|p| p.id.as_str()).collect();
         assert!(
             ids.contains(&"poll_provider"),

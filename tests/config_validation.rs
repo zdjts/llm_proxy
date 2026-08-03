@@ -7,7 +7,7 @@ fn it_loads_fixture_config_successfully() {
         "/tests/fixtures/config.yaml"
     ));
     let config = llm_proxy::config::Config::load(path).unwrap();
-    assert_eq!(config.server.port, 8080);
+    assert_eq!(config.server.port, 4000);
     assert_eq!(config.auth.client_keys.len(), 1);
     assert_eq!(config.pools.len(), 2);
     assert_eq!(config.providers.len(), 2);

@@ -39,8 +39,19 @@ async fn cost_page_contains_stat_cards() {
                 Arc::new(llm_proxy::router::BadKeyRegistry::new()),
             ),
         )),
+        catalog: llm_proxy::model_catalog::ModelCatalog::new(
+            llm_proxy::router::RouterHandle::new(Arc::new(llm_proxy::router::Router::new(
+                Default::default(),
+                Default::default(),
+                Arc::new(llm_proxy::router::BadKeyRegistry::new()),
+            ))),
+            Arc::new(llm_proxy::config_store::ConfigStore::for_test(
+                pool.clone(),
+                config.model_metadata.clone(),
+            )),
+        ),
         db: pool.clone(),
-        config,
+        config: config.clone(),
         cache: llm_proxy::cache::PromptCache::new(0),
         alert_tx,
         error_burst_counters: Arc::new(dashmap::DashMap::new()),
@@ -55,7 +66,10 @@ async fn cost_page_contains_stat_cards() {
         pipeline: None,
         rbac_state: None,
         quota_tracker: None,
-        config_store: None,
+        config_store: Arc::new(llm_proxy::config_store::ConfigStore::for_test(
+            pool.clone(),
+            config.model_metadata.clone(),
+        )),
         budget_manager: None,
     };
     let app = Router::new()
@@ -95,6 +109,13 @@ async fn cost_page_contains_stat_cards() {
 #[tokio::test]
 async fn help_page_serves_runbook() {
     let (alert_tx, _) = tokio::sync::broadcast::channel(16);
+    let db = sqlx::sqlite::SqlitePoolOptions::new()
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    let config = Arc::new(
+        llm_proxy::config::Config::load(std::path::Path::new("config.example.yaml")).unwrap(),
+    );
     let app_state = llm_proxy::server::AppState {
         router: llm_proxy::router::RouterHandle::new(std::sync::Arc::new(
             llm_proxy::router::Router::new(
@@ -103,6 +124,17 @@ async fn help_page_serves_runbook() {
                 Arc::new(llm_proxy::router::BadKeyRegistry::new()),
             ),
         )),
+        catalog: llm_proxy::model_catalog::ModelCatalog::new(
+            llm_proxy::router::RouterHandle::new(Arc::new(llm_proxy::router::Router::new(
+                Default::default(),
+                Default::default(),
+                Arc::new(llm_proxy::router::BadKeyRegistry::new()),
+            ))),
+            Arc::new(llm_proxy::config_store::ConfigStore::for_test(
+                db.clone(),
+                config.model_metadata.clone(),
+            )),
+        ),
         db: sqlx::sqlite::SqlitePoolOptions::new()
             .connect("sqlite::memory:")
             .await
@@ -129,7 +161,10 @@ async fn help_page_serves_runbook() {
         pipeline: None,
         rbac_state: None,
         quota_tracker: None,
-        config_store: None,
+        config_store: Arc::new(llm_proxy::config_store::ConfigStore::for_test(
+            db.clone(),
+            config.model_metadata.clone(),
+        )),
         budget_manager: None,
     };
     let app = Router::new()

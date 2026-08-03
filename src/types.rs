@@ -164,6 +164,34 @@ pub struct Model {
     pub owned_by: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ModelMetadataPricing {
+    pub input_usd_per_million_tokens: f64,
+    pub output_usd_per_million_tokens: f64,
+    pub cache_read_usd_per_million_tokens: f64,
+    pub cache_write_usd_per_million_tokens: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ModelMetadata {
+    pub id: String,
+    pub name: String,
+    pub context_window: u32,
+    pub max_output_tokens: u32,
+    pub input_types: Vec<String>,
+    pub reasoning: bool,
+    pub thinking_levels: Vec<String>,
+    pub supports_tools: bool,
+    pub supports_vision: bool,
+    pub pricing: ModelMetadataPricing,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ModelMetadataResponse {
+    pub object: String,
+    pub data: Vec<ModelMetadata>,
+}
+
 /// Response payload for `GET /v1/models`.
 #[derive(Debug, Serialize)]
 pub struct ModelsResponse {

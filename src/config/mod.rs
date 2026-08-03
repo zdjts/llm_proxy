@@ -22,6 +22,8 @@ pub struct Config {
     pub providers: Vec<ProviderConfig>,
     pub model_to_pool: HashMap<String, ModelRouting>,
     #[serde(default)]
+    pub model_metadata: ModelMetadataConfig,
+    #[serde(default)]
     pub bootstrap_admin: BootstrapAdminConfig,
     #[serde(default)]
     pub admin: AdminConfig,
@@ -219,6 +221,122 @@ impl ModelRouting {
 impl From<&str> for ModelRouting {
     fn from(s: &str) -> Self {
         ModelRouting::Simple(s.to_owned())
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ModelMetadataConfig {
+    #[serde(default)]
+    pub defaults: ModelMetadataPartial,
+    #[serde(default)]
+    pub pools: HashMap<String, ModelMetadataPartial>,
+    #[serde(default)]
+    pub models: HashMap<String, ModelMetadataPartial>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ModelMetadataPartial {
+    pub name: Option<String>,
+    pub context_window: Option<u32>,
+    pub max_output_tokens: Option<u32>,
+    pub input_types: Option<Vec<String>>,
+    pub reasoning: Option<bool>,
+    pub thinking_levels: Option<Vec<String>>,
+    pub supports_tools: Option<bool>,
+    pub supports_vision: Option<bool>,
+    #[serde(default)]
+    pub pricing: MetadataPricingPartial,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct MetadataPricingPartial {
+    pub input_usd_per_million_tokens: Option<f64>,
+    pub output_usd_per_million_tokens: Option<f64>,
+    pub cache_read_usd_per_million_tokens: Option<f64>,
+    pub cache_write_usd_per_million_tokens: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelMetadata {
+    pub name: String,
+    pub context_window: u32,
+    pub max_output_tokens: u32,
+    pub input_types: Vec<String>,
+    pub reasoning: bool,
+    pub thinking_levels: Vec<String>,
+    pub supports_tools: bool,
+    pub supports_vision: bool,
+    pub pricing: MetadataPricing,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MetadataPricing {
+    pub input_usd_per_million_tokens: f64,
+    pub output_usd_per_million_tokens: f64,
+    pub cache_read_usd_per_million_tokens: f64,
+    pub cache_write_usd_per_million_tokens: f64,
+}
+
+impl ModelMetadataConfig {
+    pub fn for_model(&self, model: &str, pool: &str) -> ModelMetadata {
+        let mut out = ModelMetadata {
+            name: model.to_owned(),
+            context_window: 128_000,
+            max_output_tokens: 16_384,
+            input_types: vec!["text".into()],
+            reasoning: false,
+            thinking_levels: Vec::new(),
+            supports_tools: false,
+            supports_vision: false,
+            pricing: MetadataPricing {
+                input_usd_per_million_tokens: 0.0,
+                output_usd_per_million_tokens: 0.0,
+                cache_read_usd_per_million_tokens: 0.0,
+                cache_write_usd_per_million_tokens: 0.0,
+            },
+        };
+        let empty = ModelMetadataPartial::default();
+        let pool_partial = self.pools.get(pool).unwrap_or(&empty);
+        let model_partial = self.models.get(model).unwrap_or(&empty);
+        for p in [&self.defaults, pool_partial, model_partial] {
+            if let Some(v) = &p.name {
+                out.name = v.clone();
+            }
+            if let Some(v) = p.context_window {
+                out.context_window = v;
+            }
+            if let Some(v) = p.max_output_tokens {
+                out.max_output_tokens = v;
+            }
+            if let Some(v) = &p.input_types {
+                out.input_types = v.clone();
+            }
+            if let Some(v) = p.reasoning {
+                out.reasoning = v;
+            }
+            if let Some(v) = &p.thinking_levels {
+                out.thinking_levels = v.clone();
+            }
+            if let Some(v) = p.supports_tools {
+                out.supports_tools = v;
+            }
+            if let Some(v) = p.supports_vision {
+                out.supports_vision = v;
+            }
+            if let Some(v) = p.pricing.input_usd_per_million_tokens {
+                out.pricing.input_usd_per_million_tokens = v;
+            }
+            if let Some(v) = p.pricing.output_usd_per_million_tokens {
+                out.pricing.output_usd_per_million_tokens = v;
+            }
+            if let Some(v) = p.pricing.cache_read_usd_per_million_tokens {
+                out.pricing.cache_read_usd_per_million_tokens = v;
+            }
+            if let Some(v) = p.pricing.cache_write_usd_per_million_tokens {
+                out.pricing.cache_write_usd_per_million_tokens = v;
+            }
+        }
+        out
     }
 }
 
@@ -574,5 +692,26 @@ model_to_pool:
         let config: Config = serde_yaml::from_str(yaml).unwrap();
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("empty key"));
+    }
+    #[test]
+    fn model_metadata_merge_preserves_nested_pricing() {
+        let cfg: ModelMetadataConfig = serde_yaml::from_str(
+            r#"
+defaults:
+  context_window: 100
+  pricing: { input_usd_per_million_tokens: 1.0, output_usd_per_million_tokens: 2.0 }
+pools:
+  p: { context_window: 200, pricing: { output_usd_per_million_tokens: 3.0 } }
+models:
+  m: { max_output_tokens: 42, pricing: { cache_read_usd_per_million_tokens: 4.0 } }
+"#,
+        )
+        .unwrap();
+        let got = cfg.for_model("m", "p");
+        assert_eq!(got.context_window, 200);
+        assert_eq!(got.max_output_tokens, 42);
+        assert_eq!(got.pricing.input_usd_per_million_tokens, 1.0);
+        assert_eq!(got.pricing.output_usd_per_million_tokens, 3.0);
+        assert_eq!(got.pricing.cache_read_usd_per_million_tokens, 4.0);
     }
 }

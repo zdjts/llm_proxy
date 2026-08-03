@@ -53,7 +53,24 @@ model_to_pool:
     default_params:
       thinking: { level: "low" }
 
-# ── v2.0 新增配置 ────────────────────────────────────────────
+# Optional model metadata (merged defaults → pool → model)
+# model_metadata:
+#   defaults:
+#     context_window: 128000
+#     max_output_tokens: 16384
+#     input_types: [text]
+#     supports_tools: true
+#     pricing:
+#       input_usd_per_million_tokens: 2.5
+#       output_usd_per_million_tokens: 10.0
+#   pools:
+#     openai_pool:
+#       supports_vision: true
+#   models:
+#     gpt-4o:
+#       name: GPT-4o
+#       reasoning: false
+
 
 # pipeline:
 #   strip_thinking: false

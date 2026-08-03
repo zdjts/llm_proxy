@@ -4,7 +4,9 @@
 //! 1. V2 nested: `pricing: { models: { "<model>": { default: {...}, tenants: {...} } } }`
 //! 2. V1 flat:    `pricing: { "<model>": { prompt: ..., completion: ... } }`
 //!
-//! The `lookup_pricing` helper resolves tenant-specific overrides.
+//! [`AccountingPricing`] is the explicit billing boundary. It delegates to this
+//! config without consulting model metadata pricing, whose units and purpose are
+//! different (display-only USD per million tokens).
 
 use std::collections::HashMap;
 
@@ -40,7 +42,33 @@ pub struct ModelPricing {
     pub tenants: HashMap<String, PriceEntry>,
 }
 
+/// Read-only billing view over [`PricingConfig`].
+///
+/// This type is intentionally narrow: accounting, budget checks, and cost
+/// calculations use this view; metadata pricing is never consulted or merged.
+#[derive(Debug, Clone, Copy)]
+pub struct AccountingPricing<'a> {
+    config: &'a PricingConfig,
+}
+
+impl<'a> AccountingPricing<'a> {
+    pub fn new(config: &'a PricingConfig) -> Self {
+        Self { config }
+    }
+
+    /// Look up the effective accounting price: tenant override, then default,
+    /// then the zero-price missing-model fallback.
+    pub fn lookup(&self, model: &str, tenant: Option<&str>) -> &PriceEntry {
+        self.config.lookup(model, tenant)
+    }
+}
+
 impl PricingConfig {
+    /// Create the explicit billing view for this configuration.
+    pub fn accounting(&self) -> AccountingPricing<'_> {
+        AccountingPricing::new(self)
+    }
+
     /// Look up the effective price for a (model, tenant) pair.
     /// Falls back: tenants[tenant] → default → zero.
     pub fn lookup(&self, model: &str, tenant: Option<&str>) -> &PriceEntry {
@@ -178,5 +206,26 @@ models:
         let bob = cfg.lookup("gpt-4o", Some("bob"));
         assert_eq!(bob.prompt, 2.5);
         assert_eq!(bob.completion, 10.0);
+    }
+
+    #[test]
+    fn accounting_view_is_independent_from_metadata_pricing() {
+        let accounting: PricingConfig =
+            serde_yaml::from_str("gpt-4o:\n  prompt: 2.5\n  completion: 10.0").unwrap();
+        let metadata = crate::config::ModelMetadataConfig {
+            defaults: crate::config::ModelMetadataPartial {
+                pricing: crate::config::MetadataPricingPartial {
+                    input_usd_per_million_tokens: Some(999.0),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let displayed = metadata.for_model("gpt-4o", "pool-a");
+        let accounting_view = accounting.accounting();
+        let billed = accounting_view.lookup("gpt-4o", None);
+        assert_eq!(displayed.pricing.input_usd_per_million_tokens, 999.0);
+        assert_eq!((billed.prompt, billed.completion), (2.5, 10.0));
     }
 }

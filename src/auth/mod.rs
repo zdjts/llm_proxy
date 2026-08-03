@@ -15,6 +15,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
+use crate::auth_store::AuthStore;
 use crate::error::AppError;
 
 /// Identifies the authenticated client whose key passed validation.
@@ -42,6 +43,7 @@ fn default_tenant() -> String {
 #[derive(Clone)]
 pub struct AuthState {
     pub entries: Vec<ClientKeyEntry>,
+    pub store: Option<std::sync::Arc<AuthStore>>,
 }
 
 /// axum middleware that rejects requests missing a valid `Authorization: Bearer` header.
@@ -61,9 +63,17 @@ pub async fn require_auth(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
 
-    match auth_header {
-        Some(key) if state.entries.iter().any(|e| e.key == key) => {
-            let entry = state.entries.iter().find(|e| e.key == key).unwrap();
+    let entry = match auth_header {
+        Some(key) => match &state.store {
+            Some(store) => store.validate(key),
+            None => state.entries.iter().find(|e| e.key == key).cloned(),
+        },
+        None => None,
+    };
+
+    match entry {
+        Some(entry) => {
+            let key = auth_header.unwrap_or_default();
             let key_hash = crate::db::compute_key_hash(key);
             request.extensions_mut().insert(AuthedClient {
                 key_hash,
@@ -81,14 +91,18 @@ pub async fn require_auth(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::Router;
+    use std::sync::Arc;
 
-    use axum::http::StatusCode;
+    use crate::auth_store::AuthStore;
+    use axum::Router;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
     use axum::routing::get;
     use tower::util::ServiceExt;
 
     fn auth_state(keys: &[&str]) -> AuthState {
         AuthState {
+            store: None,
             entries: keys
                 .iter()
                 .map(|s| ClientKeyEntry {
@@ -99,12 +113,97 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
+    fn store_auth_state(entries: &[&str]) -> AuthState {
+        AuthState {
+            store: Some(Arc::new(AuthStore::new(
+                entries
+                    .iter()
+                    .map(|key| ClientKeyEntry {
+                        key: (*key).to_owned(),
+                        tenant_id: "default".into(),
+                    })
+                    .collect(),
+            ))),
+            entries: vec![ClientKeyEntry {
+                key: "static-fallback-key".into(),
+                tenant_id: "static".into(),
+            }],
+        }
+    }
+
     fn test_app(state: AuthState) -> Router {
         Router::new()
             .route("/", get(|| async { "ok" }))
             .layer(axum::middleware::from_fn_with_state(state, require_auth))
     }
 
+    #[tokio::test]
+    async fn store_is_the_only_authority_when_present() {
+        let store = Arc::new(AuthStore::new(vec![ClientKeyEntry {
+            key: "managed-key".into(),
+            tenant_id: "managed".into(),
+        }]));
+        let app = test_app(AuthState {
+            store: Some(Arc::clone(&store)),
+            entries: vec![ClientKeyEntry {
+                key: "managed-key".into(),
+                tenant_id: "yaml".into(),
+            }],
+        });
+        let req = Request::builder()
+            .uri("/")
+            .header(header::AUTHORIZATION, "Bearer managed-key")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let hash = crate::db::compute_key_hash("managed-key");
+        store
+            .update(
+                &hash,
+                crate::auth_store::UpdateKeyRequest {
+                    enabled: Some(false),
+                    label: None,
+                    tenant_id: None,
+                },
+            )
+            .unwrap();
+        let req = Request::builder()
+            .uri("/")
+            .header(header::AUTHORIZATION, "Bearer managed-key")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let rotated = store
+            .rotate(
+                &hash,
+                crate::auth_store::RotateKeyRequest {
+                    new_key: "rotated-key".into(),
+                },
+            )
+            .unwrap();
+        assert_eq!(rotated.key_hash, crate::db::compute_key_hash("rotated-key"));
+        let req = Request::builder()
+            .uri("/")
+            .header(header::AUTHORIZATION, "Bearer managed-key")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        store.remove(&rotated.key_hash).unwrap();
+        let req = Request::builder()
+            .uri("/")
+            .header(header::AUTHORIZATION, "Bearer rotated-key")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
     #[tokio::test]
     async fn it_passes_valid_key() {
         let app = test_app(auth_state(&["sk-test"]));

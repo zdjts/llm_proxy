@@ -11,6 +11,7 @@ use tower::util::ServiceExt;
 
 fn auth_state(keys: &[&str]) -> AuthState {
     AuthState {
+        store: None,
         entries: keys
             .iter()
             .map(|s| llm_proxy::auth::ClientKeyEntry {

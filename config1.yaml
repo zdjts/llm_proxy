@@ -1,0 +1,77 @@
+server:
+  host: 127.0.0.1
+  port: 4000
+auth:
+  client_keys: []
+db:
+  path: ./data/llm_proxy.db
+failover:
+  enabled: true
+  bad_status_codes:
+    - 401
+    - 402
+    - 403
+    - 429
+  max_retries: 1
+  probe_interval_secs: 60
+  probe_timeout_secs: 10
+  max_probe_retries: 3
+providers:
+  - api_version: null
+    base_url: https://api.nwafu-ai.cn/v1
+    id: nwafu
+    kind: openai
+    metadata: {}
+    pool_id: nwafu_pool
+    region: null
+  - api_version: null
+    base_url: https://opencode.ai/zen/go/v1
+    id: opencode
+    kind: openai
+    metadata: {}
+    pool_id: opencode_pool
+    region: null
+  - api_version: null
+    base_url: https://api.wokey.ai/v1
+    id: wokey
+    kind: openai
+    metadata: {}
+    pool_id: wokey_pool
+    region: null
+  - api_version: null
+    base_url: https://mo.monond.com/v1
+    id: monond
+    kind: openai
+    metadata: {}
+    pool_id: monond_pool
+    region: null
+pools:
+  monond_pool:
+    keys:
+      - key: sk-ee798e8974f70ff73bb64c915362b5c76555812065f7d9defd4d05444edafb06
+        weight: 1
+    strategy: weightedrandom
+  nwafu_pool:
+    keys:
+      - key: sk-93NzlRsamJgGUeTT5OnSsSw8C9eNPeRUHEqNmBq7j2ALYaCb
+        weight: 1
+    strategy: weightedrandom
+  opencode_pool:
+    keys:
+      - key: sk-DPUmv0hw2o2khEs6C2KOFEKXihZeqFRKcNV86mlvFcPtIFxRevAXUh9glcsWKoxH
+        weight: 1
+    strategy: weightedrandom
+  wokey_pool:
+    keys:
+      - key: sk-b677f7b900bdf450230a41b78bb374c6
+        weight: 1
+    strategy: weightedrandom
+model_to_pool:
+  deepseek-v4-flash: opencode_pool
+  deepseek-v4-pro: opencode_pool
+  gpt-5.4-mini: wokey_pool
+  gpt-5.6-luna: nwafu_pool
+  grok-4.3-pro: wokey_pool
+  grok-4.5: wokey_pool
+  qwen3.7-plus: wokey_pool
+  gpt-5.6-terra: monond_pool

@@ -19,6 +19,8 @@ import { HelpPage } from '@/pages/Help';
 import { LivePage } from '@/pages/Live';
 import { ClientKeysPage } from '@/pages/ClientKeys';
 import { QuotasPage } from '@/pages/Quotas';
+import { ConfigConsolePage } from '@/pages/ConfigConsole';
+
 
 // ── v4.1: Configuration pages (Track M) ──
 import { ProviderListPage } from '@/pages/config/ProviderListPage';
@@ -70,14 +72,24 @@ export default function App() {
                 <Route path="/cost/drilldown" element={<DrilldownPage />} />
                 <Route path="/help" element={<HelpPage />} />
                 <Route path="/live" element={<LivePage />} />
-                <Route path="/client-keys" element={<ClientKeysPage />} />
+                <Route element={<RouteGuard requiredPermission="keys.manage" />}>
+                  <Route path="/client-keys" element={<ClientKeysPage />} />
+                </Route>
                 <Route path="/quotas" element={<QuotasPage />} />
 
-                {/* Configuration (Track M) */}
-                <Route path="/config/providers" element={<ProviderListPage />} />
-                <Route path="/config/pools" element={<PoolListPage />} />
-                <Route path="/config/routing" element={<RoutingConfigPage />} />
-                <Route path="/config/models" element={<ModelCatalogPage />} />
+                <Route element={<RouteGuard requiredPermission="audit.view" />}>
+                  <Route path="/config" element={<ConfigConsolePage />} />
+                </Route>
+                <Route element={<RouteGuard requiredPermission="providers.manage" />}>
+                  <Route path="/config/providers" element={<ProviderListPage />} />
+                  <Route path="/config/models" element={<ModelCatalogPage />} />
+                </Route>
+                <Route element={<RouteGuard requiredPermission="keys.manage" />}>
+                  <Route path="/config/pools" element={<PoolListPage />} />
+                </Route>
+                <Route element={<RouteGuard requiredPermission="routing.edit" />}>
+                  <Route path="/config/routing" element={<RoutingConfigPage />} />
+                </Route>
 
                 {/* Budget & Admin (Track N) */}
                 <Route path="/budgets" element={<BudgetPage />} />

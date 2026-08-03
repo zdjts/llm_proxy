@@ -1,9 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { fetchRouting } from '@/lib/api';
 import { Card, Skeleton, Badge } from '@/components/ui';
 
 export function RoutingConfigPage() {
-  const { data, isLoading } = useQuery({ queryKey: ['routing'], queryFn: () => api.get('/admin/api/routing').then(r => r.data) });
+  const { data, isLoading } = useQuery({ queryKey: ['routing'], queryFn: fetchRouting });
   if (isLoading) return <Skeleton className="h-64" />;
   const entries = data?.routing || [];
   return (

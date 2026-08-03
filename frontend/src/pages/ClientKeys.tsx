@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { fetchClientKeys, addClientKey, updateClientKey, deleteClientKey, rotateClientKey } from '@/lib/api';
+import { fetchClientKeys, addClientKey, updateClientKey, deleteClientKey, rotateClientKey, apiError } from '@/lib/api';
 import { Plus, Trash2, RefreshCw, Check, X, Key, Shield } from 'lucide-react';
 import { useLocale } from '@/i18n/context';
 
@@ -8,6 +8,7 @@ export function ClientKeysPage() {
   const { t } = useLocale();
   const queryClient = useQueryClient();
   const { data } = useQuery({ queryKey: ['client-keys'], queryFn: fetchClientKeys, refetchInterval: 30000 });
+  const [error, setError] = useState('');
   const [showAdd, setShowAdd] = useState(false);
   const [newKey, setNewKey] = useState({ key: '', tenant: 'default', label: '' });
   const [rotateKey, setRotateKey] = useState({ hash: '', newKey: '' });
@@ -15,15 +16,18 @@ export function ClientKeysPage() {
   const addMut = useMutation({
     mutationFn: () => addClientKey(newKey.key, newKey.tenant, newKey.label),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['client-keys'] }); setShowAdd(false); setNewKey({ key: '', tenant: 'default', label: '' }); },
+    onError: (e) => setError(apiError(e)),
   });
-  const deleteMut = useMutation({ mutationFn: deleteClientKey, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['client-keys'] }) });
+  const deleteMut = useMutation({ mutationFn: deleteClientKey, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['client-keys'] }), onError: (e) => setError(apiError(e)) });
   const toggleMut = useMutation({
     mutationFn: ({ hash, enabled }: { hash: string; enabled: boolean }) => updateClientKey(hash, { enabled }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['client-keys'] }),
+    onError: (e) => setError(apiError(e)),
   });
   const rotateMut = useMutation({
     mutationFn: () => rotateClientKey(rotateKey.hash, rotateKey.newKey),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['client-keys'] }); setRotateKey({ hash: '', newKey: '' }); },
+    onError: (e) => setError(apiError(e)),
   });
 
   return (
@@ -38,6 +42,8 @@ export function ClientKeysPage() {
           <button onClick={() => setShowAdd(true)} className="btn-gold flex items-center gap-1.5 text-sm"><Plus size={14} /> {t.clientKeys.addKey}</button>
         </div>
       </div>
+
+      {error && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
 
       {showAdd && (
         <div className="glass-card p-5 space-y-3 border-primary-200">

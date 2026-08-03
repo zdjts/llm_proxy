@@ -28,7 +28,7 @@ use llm_proxy::cache::PromptCache;
 use llm_proxy::circuit_breaker::CircuitBreaker;
 use llm_proxy::concurrency::ConcurrencyLimiter;
 use llm_proxy::config::ProviderKind;
-use llm_proxy::config::{Config, FailoverConfig, ModelRouting, PoolConfig, ProviderConfig};
+use llm_proxy::config::{Config, FailoverConfig};
 use llm_proxy::config_store::ConfigStore;
 use llm_proxy::db;
 use llm_proxy::db_maintenance::{self, DbMaintenanceConfig};
@@ -41,7 +41,8 @@ use llm_proxy::provider::openai::OpenAiProvider;
 use llm_proxy::provider::registry::ProviderRegistry;
 use llm_proxy::quota::{QuotaConfig, QuotaTracker};
 use llm_proxy::ratelimit::RateLimiter;
-use llm_proxy::router::{BadKeyRegistry, Router, RouterHandle};
+use llm_proxy::router::{BadKeyRegistry, RouterHandle};
+use llm_proxy::runtime;
 use llm_proxy::server;
 
 #[tokio::main]
@@ -90,11 +91,24 @@ async fn main() -> anyhow::Result<()> {
     llm_proxy::rbac::store::bootstrap_admin(&pool, &config.bootstrap_admin).await?;
 
     // ── v4.0 Track H (T174-T175): ConfigStore replaces YAML managed config ──
-    let config_store = Arc::new(ConfigStore::load(pool.clone(), &config).await?);
+    let config_store = Arc::new(ConfigStore::load(pool.clone()).await?);
+    config_store
+        .set_bootstrap_pricing(config.pricing.clone())
+        .await;
+    config_store
+        .set_bootstrap_model_metadata(config.model_metadata.clone())
+        .await;
+    config_store
+        .set_bootstrap_runtime(llm_proxy::config_store::RuntimePolicy {
+            failover: config.failover.clone(),
+            alerts: config.alerts.clone(),
+            cache_max_entries: config.cache_max_entries,
+        })
+        .await;
     let registry = Arc::new(registry);
 
     let router_handle = RouterHandle::new(
-        rebuild_router(
+        runtime::rebuild_router(
             &config_store,
             &registry,
             Arc::clone(&bad_status_codes),
@@ -106,10 +120,10 @@ async fn main() -> anyhow::Result<()> {
     // Health task snapshots pools/providers at startup; new pools added later
     // via ConfigStore hot-reload are still serviced through the live router.
     let pools_for_health: HashMap<String, llm_proxy::config::PoolConfig> =
-        (*config_store.get_pools().await).clone();
+        (*config_store.snapshot().await.pool_configs).clone();
     let health_providers = registry
         .build_all(
-            &config_store.get_providers().await,
+            &config_store.snapshot().await.providers,
             Arc::clone(&bad_status_codes),
         )
         .await?;
@@ -260,10 +274,14 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let app_state = server::AppState {
-        router: router_handle,
+        router: router_handle.clone(),
+        catalog: llm_proxy::model_catalog::ModelCatalog::new(
+            router_handle.clone(),
+            Arc::clone(&config_store),
+        ),
         db: pool.clone(),
         config: Arc::clone(&config),
-        config_store: Some(config_store),
+        config_store: Arc::clone(&config_store),
         budget_manager: Some(Arc::new(llm_proxy::budget::BudgetManager::new(
             pool.clone(),
         ))),
@@ -275,13 +293,14 @@ async fn main() -> anyhow::Result<()> {
         alert_tx: alert_tx.clone(),
         error_burst_counters: Arc::new(dashmap::DashMap::new()),
         alert_snapshot: alert_snapshot.clone(),
-        auth_store: Some(auth_store),
+        auth_store: Some(Arc::clone(&auth_store)),
         quota_tracker,
         pipeline,
         rbac_state: Some(rbac_state),
     };
 
     let auth_state = auth::AuthState {
+        store: Some(Arc::clone(&auth_store)),
         entries: config.auth.client_keys.clone(),
     };
 
@@ -314,46 +333,7 @@ async fn main() -> anyhow::Result<()> {
 /// Used both for the initial boot and by [`spawn_router_rebuilder`] when the
 /// DB-backed config changes. Returns an error (leaving the previous router
 /// active) if a model references a pool that no longer exists.
-async fn rebuild_router(
-    store: &ConfigStore,
-    registry: &ProviderRegistry,
-    bad_status_codes: Arc<[u16]>,
-    bad_keys: Arc<BadKeyRegistry>,
-) -> Result<Arc<Router>, llm_proxy::error::AppError> {
-    let providers = registry
-        .build_all(&store.get_providers().await, bad_status_codes)
-        .await?;
-    let pools = store.get_pools().await;
-    let routing = store.get_model_routing().await;
-
-    for (model, r) in routing.iter() {
-        if !pools.contains_key(r.pool_id()) {
-            return Err(llm_proxy::error::AppError::Config(format!(
-                "pool '{}' referenced by model '{model}' not found in configured pools",
-                r.pool_id()
-            )));
-        }
-    }
-
-    let mut model_map: HashMap<String, (String, PoolConfig, Option<serde_json::Value>)> =
-        HashMap::new();
-    for (model, r) in routing.iter() {
-        let pool_id = r.pool_id().to_string();
-        let pool = pools.get(&pool_id).cloned().ok_or_else(|| {
-            llm_proxy::error::AppError::Config(format!("pool '{pool_id}' not found"))
-        })?;
-        model_map.insert(model.clone(), (pool_id, pool, r.default_params().cloned()));
-    }
-
-    Ok(Arc::new(Router::new(model_map, providers, bad_keys)))
-}
-
-/// Snapshot of the config sections that drive routing decisions.
-type RoutingSnapshot = (
-    Arc<Vec<ProviderConfig>>,
-    Arc<HashMap<String, PoolConfig>>,
-    Arc<HashMap<String, ModelRouting>>,
-);
+type RoutingSnapshot = runtime::RoutingSnapshot;
 
 /// Poll the ConfigStore for changes and swap in a rebuilt router.
 ///
@@ -373,17 +353,17 @@ fn spawn_router_rebuilder(
         interval.tick().await;
 
         let mut last: Option<RoutingSnapshot> = Some((
-            store.get_providers().await,
-            store.get_pools().await,
-            store.get_model_routing().await,
+            store.snapshot().await.providers,
+            store.snapshot().await.pool_configs,
+            store.snapshot().await.model_routing,
         ));
 
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    let providers = store.get_providers().await;
-                    let pools = store.get_pools().await;
-                    let routing = store.get_model_routing().await;
+                    let providers = store.snapshot().await.providers;
+                    let pools = store.snapshot().await.pool_configs;
+                    let routing = store.snapshot().await.model_routing;
 
                     let changed = match &last {
                         None => true,
@@ -391,8 +371,7 @@ fn spawn_router_rebuilder(
                     };
 
                     if changed {
-                        last = Some((providers, pools, routing));
-                        match rebuild_router(
+                        match runtime::rebuild_router(
                             &store,
                             &registry,
                             Arc::clone(&bad_status_codes),
@@ -401,6 +380,7 @@ fn spawn_router_rebuilder(
                         .await
                         {
                             Ok(router) => {
+                                last = Some((providers, pools, routing));
                                 handle.swap(router);
                                 tracing::info!("router rebuilt from config store");
                             }
