@@ -5,11 +5,12 @@ import type { RequestFilter } from '@/types';
 import { Download } from 'lucide-react';
 import { csvDownload } from '@/lib/utils';
 import { useLocale } from '@/i18n/context';
+import { EmptyState, ErrorState, Skeleton } from '@/components/ui';
 
 export function RequestsPage() {
   const { t } = useLocale();
   const [filter, setFilter] = useState<RequestFilter>({ hours: 24 });
-  const { data, refetch } = useQuery({
+  const { data, refetch, isLoading, isError } = useQuery({
     queryKey: ['requests', filter],
     queryFn: () => fetchRequests(filter),
     refetchInterval: 30000,
@@ -33,9 +34,9 @@ export function RequestsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-surface-200 pb-5">
         <div>
-          <h1 className="text-2xl font-bold text-gradient">{t.requests.title}</h1>
+          <h1 className="text-xl font-semibold text-surface-900 sm:text-2xl">{t.requests.title}</h1>
           <p className="text-sm text-surface-500 mt-1">
             {t.requests.subtitle.replace('{count}', String(data?.rows.length ?? 0)).replace('{hours}', String(filter.hours ?? 24))}
           </p>
@@ -45,7 +46,7 @@ export function RequestsPage() {
         </button>
       </div>
 
-      <div className="glass-card p-4">
+      <div className="glass-card rounded-lg p-4" role="search" aria-label={t.requests.filter}>
         <div className="flex flex-wrap gap-2.5">
           <select value={filter.tenant ?? ''} onChange={e => setFilter(f => ({ ...f, tenant: e.target.value || undefined }))} className="input-glass">
             <option value="">{t.requests.allTenants}</option>
@@ -62,11 +63,11 @@ export function RequestsPage() {
         </div>
       </div>
 
-      <div className="glass-card overflow-hidden">
+      {isLoading ? <Skeleton className="h-32 w-full" /> : isError ? <ErrorState action={<button type="button" className="btn-secondary text-xs" onClick={() => refetch()}>{t.common.uiRetry}</button>} /> : <div className="glass-card rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-surface-100 bg-surface-50/50">
+            <thead className="bg-surface-50">
+              <tr className="border-b border-surface-200">
                 <th className="text-left p-3 text-xs text-surface-400 uppercase font-semibold">{t.requests.thTime}</th>
                 <th className="text-left p-3 text-xs text-surface-400 uppercase font-semibold">{t.requests.thModel}</th>
                 <th className="text-left p-3 text-xs text-surface-400 uppercase font-semibold">{t.requests.thPool}</th>
@@ -101,12 +102,12 @@ export function RequestsPage() {
                 </tr>
               ))}
               {(!data?.rows || data.rows.length === 0) && (
-                <tr><td colSpan={13} className="p-10 text-center text-surface-400">{t.requests.noData}</td></tr>
+                <tr><td colSpan={13} className="p-10"><EmptyState title={t.requests.noData} /></td></tr>
               )}
             </tbody>
           </table>
         </div>
-      </div>
+      </div>}
     </div>
   );
 }

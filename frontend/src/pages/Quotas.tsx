@@ -3,26 +3,27 @@ import { fetchQuotas } from '@/lib/api';
 import { Gauge, Infinity } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useLocale } from '@/i18n/context';
+import { EmptyState, ErrorState, Skeleton } from '@/components/ui';
 
 export function QuotasPage() {
   const { t } = useLocale();
-  const { data } = useQuery({ queryKey: ['quotas'], queryFn: fetchQuotas, refetchInterval: 30000 });
+  const { data, isLoading, isError, refetch } = useQuery({ queryKey: ['quotas'], queryFn: fetchQuotas, refetchInterval: 30000 });
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gradient">{t.quotas.title}</h1>
+      <div className="border-b border-surface-200 pb-5">
+        <h1 className="text-xl font-semibold text-surface-900 sm:text-2xl">{t.quotas.title}</h1>
         <p className="text-sm text-surface-500 mt-1">{t.quotas.subtitle}</p>
       </div>
 
-      {data && data.length > 0 ? (
+      {isLoading ? <Skeleton className="h-32 w-full" /> : isError ? <ErrorState action={<button type="button" className="btn-secondary text-xs" onClick={() => refetch()}>{t.common.uiRetry}</button>} /> : data && data.length > 0 ? (
         <div className="grid gap-4">
           {data.map(q => {
             const tokenPct = q.daily_tokens_limit ? Math.min(100, (q.daily_tokens_used / q.daily_tokens_limit) * 100) : 0;
             const reqPct = q.monthly_requests_limit ? Math.min(100, (q.monthly_requests_used / q.monthly_requests_limit) * 100) : 0;
 
             return (
-              <motion.div key={q.tenant_id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-5">
+              <motion.div key={q.tenant_id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="glass-card rounded-lg p-5">
                 <div className="flex items-center gap-2.5 mb-5">
                   <div className="w-8 h-8 rounded-xl bg-primary-50 flex items-center justify-center"><Gauge size={16} className="text-primary-600" /></div>
                   <h3 className="text-lg font-semibold text-surface-800">{q.tenant_id}</h3>
@@ -66,11 +67,7 @@ export function QuotasPage() {
           })}
         </div>
       ) : (
-        <div className="glass-card p-16 text-center text-surface-400">
-          <Gauge size={32} className="mx-auto mb-3 text-surface-300" />
-          <p className="text-sm font-medium">{t.quotas.noData}</p>
-          <p className="text-xs mt-1">{t.quotas.noDataHint}</p>
-        </div>
+        <EmptyState title={t.quotas.noData} description={t.quotas.noDataHint} />
       )}
     </div>
   );

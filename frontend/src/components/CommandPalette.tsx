@@ -11,7 +11,7 @@ interface CommandItem {
 }
 
 const commands: CommandItem[] = [
-  { id: 'overview', label: 'Overview', icon: LayoutDashboard, to: '/', keywords: ['home', 'dashboard'] },
+  { id: 'overview', label: 'Overview', icon: LayoutDashboard, to: '/console', keywords: ['home', 'dashboard'] },
   { id: 'providers', label: 'Providers', icon: Server, to: '/config/providers', keywords: ['config', 'upstream'] },
   { id: 'pools', label: 'Key Pools', icon: Key, to: '/config/pools', keywords: ['keys', 'api'] },
   { id: 'routing', label: 'Routing', icon: Boxes, to: '/config/routing', keywords: ['model', 'route'] },

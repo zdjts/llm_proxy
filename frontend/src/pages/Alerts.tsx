@@ -4,6 +4,7 @@ import { fetchAlerts } from '@/lib/api';
 import { AlertTriangle, Clock, Zap, Ban, Download } from 'lucide-react';
 import { csvDownload } from '@/lib/utils';
 import { useLocale } from '@/i18n/context';
+import { EmptyState, ErrorState, Skeleton } from '@/components/ui';
 
 const typeIcons: Record<string, typeof AlertTriangle> = { UpstreamError: AlertTriangle, LatencySpike: Clock, RateLimited: Zap, PoolExhausted: Ban };
 const typeColors: Record<string, string> = { UpstreamError: 'badge-error', LatencySpike: 'badge-warn', RateLimited: 'badge-purple', PoolExhausted: 'badge-info' };
@@ -12,7 +13,7 @@ export function AlertsPage() {
   const { t } = useLocale();
   const [type, setType] = useState('');
   const [tenant, setTenant] = useState('');
-  const { data } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['alerts', type, tenant],
     queryFn: () => fetchAlerts(type || undefined, tenant || undefined),
     refetchInterval: 15000,
@@ -26,9 +27,9 @@ export function AlertsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-surface-200 pb-5">
         <div>
-          <h1 className="text-2xl font-bold text-gradient">{t.alerts.title}</h1>
+          <h1 className="text-xl font-semibold text-surface-900 sm:text-2xl">{t.alerts.title}</h1>
           <p className="text-sm text-surface-500 mt-1">{t.alerts.subtitle.replace('{count}', String(data?.event_count ?? 0))}</p>
         </div>
         <button onClick={handleCsvExport} className="btn-gold flex items-center gap-1.5 text-xs" disabled={!data?.events?.length}>
@@ -36,7 +37,7 @@ export function AlertsPage() {
         </button>
       </div>
 
-      <div className="glass-card p-4 flex flex-wrap gap-3">
+      <div className="glass-card rounded-lg flex flex-wrap gap-3 p-4" role="search">
         <select value={type} onChange={e => setType(e.target.value)} className="input-glass">
           <option value="">{t.alerts.allTypes}</option>
           {['UpstreamError', 'LatencySpike', 'RateLimited', 'PoolExhausted'].map(tp => <option key={tp} value={tp}>{tp}</option>)}
@@ -44,11 +45,11 @@ export function AlertsPage() {
         <input placeholder={t.common.placeholder_tenant} value={tenant} onChange={e => setTenant(e.target.value)} className="input-glass w-40" />
       </div>
 
-      <div className="glass-card overflow-hidden">
+      {isLoading ? <Skeleton className="h-32 w-full" /> : isError ? <ErrorState action={<button type="button" className="btn-secondary text-xs" onClick={() => refetch()}>{t.common.uiRetry}</button>} /> : <div className="glass-card rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-surface-100 bg-surface-50/50">
+            <thead className="bg-surface-50">
+              <tr className="border-b border-surface-200">
                 <th className="text-left p-3 text-xs text-surface-400 uppercase font-semibold">{t.alerts.thId}</th>
                 <th className="text-left p-3 text-xs text-surface-400 uppercase font-semibold">{t.alerts.thTime}</th>
                 <th className="text-left p-3 text-xs text-surface-400 uppercase font-semibold">{t.alerts.thType}</th>
@@ -76,12 +77,12 @@ export function AlertsPage() {
                 );
               })}
               {(!data?.events || data.events.length === 0) && (
-                <tr><td colSpan={8} className="p-12 text-center text-surface-400"><AlertTriangle size={24} className="mx-auto mb-2 text-surface-300" />{t.alerts.noData}</td></tr>
+                <tr><td colSpan={8} className="p-10"><EmptyState title={t.alerts.noData} /></td></tr>
               )}
             </tbody>
           </table>
         </div>
-      </div>
+      </div>}
     </div>
   );
 }

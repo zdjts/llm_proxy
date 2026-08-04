@@ -1,12 +1,14 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, RefreshCw, Server } from 'lucide-react';
+import { Plus, Trash2 } from 'lucide-react';
 import { createProvider, deleteProvider, fetchProviders, apiError } from '@/lib/api';
-import { Card, Button, Modal, Badge, EmptyState, Skeleton, Table } from '@/components/ui';
+import { Button, Modal, Badge, EmptyState, ErrorState, Skeleton, Table } from '@/components/ui';
+import { useLocale } from '@/i18n/context';
 import { useState } from 'react';
 
 export function ProviderListPage() {
   const qc = useQueryClient();
-  const { data, isLoading } = useQuery({ queryKey: ['providers'], queryFn: fetchProviders });
+  const { t } = useLocale();
+  const { data, isLoading, isError, refetch } = useQuery({ queryKey: ['providers'], queryFn: fetchProviders });
   const [formError, setFormError] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState({ id: '', kind: 'openai', base_url: '', pool_id: '' });
@@ -23,51 +25,49 @@ export function ProviderListPage() {
     onError: (error) => setFormError(apiError(error)),
   });
 
-  if (isLoading) return <div className="space-y-4"><Skeleton className="h-8 w-48" /><Skeleton className="h-64 w-full" /></div>;
-
   const providers = data?.providers || [];
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-surface-200 pb-5">
         <div>
-          <h1 className="text-2xl font-bold text-surface-800">Providers</h1>
-          <p className="text-sm text-surface-400 mt-1">Manage upstream provider configurations</p>
+          <h1 className="text-xl font-semibold text-surface-900 sm:text-2xl">{t.configAdmin.providerTitle}</h1>
+          <p className="mt-1 text-sm text-surface-500">{t.configAdmin.providerSubtitle}</p>
         </div>
-        <Button onClick={() => setShowCreate(true)}><Plus size={16} /> Add Provider</Button>
+        <Button onClick={() => setShowCreate(true)}><Plus size={16} /> {t.configAdmin.addProvider}</Button>
       </div>
 
-      {providers.length === 0 ? (
-        <EmptyState title="No providers configured" description="Add your first upstream provider to start routing requests." action={<Button onClick={() => setShowCreate(true)}><Plus size={16} /> Add Provider</Button>} />
+      {isLoading ? <Skeleton className="h-64 w-full" /> : isError ? <ErrorState action={<Button size="sm" variant="secondary" onClick={() => refetch()}>{t.adminUi.retry}</Button>} /> : providers.length === 0 ? (
+        <EmptyState title={t.adminUi.noProviders} description={t.configAdmin.providerEmptyHint} action={<Button onClick={() => setShowCreate(true)}><Plus size={16} /> {t.configAdmin.addProvider}</Button>} />
       ) : (
         <Table
-          headers={['ID', 'Kind', 'Base URL', 'Pool', 'Actions']}
+          headers={['ID', 'Kind', t.configAdmin.baseUrl, 'Pool', t.adminUi.actions]}
           rows={providers.map((p: Record<string, unknown>) => [
             <span className="font-mono text-xs">{p.id as string}</span>,
             <Badge variant="info">{p.kind as string}</Badge>,
             <span className="font-mono text-xs text-surface-500">{p.base_url as string}</span>,
             <span className="font-mono text-xs">{p.pool_id as string}</span>,
             <div className="flex items-center gap-2">
-              <Button variant="ghost" size="sm" onClick={() => deleteMutation.mutate(p.id as string)}><Trash2 size={14} className="text-red-400" /></Button>
+              <Button variant="danger" size="sm" loading={deleteMutation.isPending} aria-label={`${t.adminUi.delete} ${p.id as string}`} onClick={() => { if (window.confirm(t.adminUi.confirmDelete)) deleteMutation.mutate(p.id as string); }}><Trash2 size={14} /></Button>
             </div>,
           ])}
         />
       )}
 
-      <Modal open={showCreate} onClose={() => { setShowCreate(false); setFormError(''); }} title="Add Provider">
+      <Modal open={showCreate} onClose={() => { setShowCreate(false); setFormError(''); }} title={t.configAdmin.addProvider}>
         <div className="space-y-3">
-          <input className="w-full px-3 py-2 rounded-lg border border-surface-200 text-sm" placeholder="Provider ID (e.g. openai-east)" value={form.id} onChange={e => setForm({ ...form, id: e.target.value })} />
-          <select className="w-full px-3 py-2 rounded-lg border border-surface-200 text-sm" value={form.kind} onChange={e => setForm({ ...form, kind: e.target.value })}>
+          <input className="w-full rounded-md border border-surface-200 px-3 py-2 text-sm" placeholder={t.configAdmin.providerId} value={form.id} onChange={e => setForm({ ...form, id: e.target.value })} />
+          <select className="w-full rounded-md border border-surface-200 px-3 py-2 text-sm" value={form.kind} onChange={e => setForm({ ...form, kind: e.target.value })}>
             <option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="gemini">Gemini</option>
             <option value="azure">Azure</option><option value="cohere">Cohere</option><option value="mistral">Mistral</option>
             <option value="ollama">Ollama</option><option value="vllm">vLLM</option>
           </select>
-          <input className="w-full px-3 py-2 rounded-lg border border-surface-200 text-sm" placeholder="Base URL (e.g. https://api.openai.com/v1)" value={form.base_url} onChange={e => setForm({ ...form, base_url: e.target.value })} />
-          <input className="w-full px-3 py-2 rounded-lg border border-surface-200 text-sm" placeholder="Pool ID" value={form.pool_id} onChange={e => setForm({ ...form, pool_id: e.target.value })} />
+          <input className="w-full rounded-md border border-surface-200 px-3 py-2 text-sm" placeholder={t.configAdmin.baseUrl} value={form.base_url} onChange={e => setForm({ ...form, base_url: e.target.value })} />
+          <input className="w-full rounded-md border border-surface-200 px-3 py-2 text-sm" placeholder={t.configAdmin.poolId} value={form.pool_id} onChange={e => setForm({ ...form, pool_id: e.target.value })} />
           {formError && <p className="text-sm text-red-600">{formError}</p>}
           <div className="flex gap-2 justify-end pt-2">
-            <Button variant="secondary" onClick={() => setShowCreate(false)}>Cancel</Button>
-            <Button onClick={() => createMutation.mutate()} loading={createMutation.isPending}>Create</Button>
+            <Button variant="secondary" onClick={() => setShowCreate(false)}>{t.adminUi.cancel}</Button>
+            <Button onClick={() => createMutation.mutate()} loading={createMutation.isPending}>{t.adminUi.create}</Button>
           </div>
         </div>
       </Modal>

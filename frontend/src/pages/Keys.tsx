@@ -3,10 +3,11 @@ import { fetchKeys } from '@/lib/api';
 import { ShieldCheck, ShieldX, Activity } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useLocale } from '@/i18n/context';
+import { EmptyState, ErrorState, Skeleton } from '@/components/ui';
 
 export function KeysPage() {
   const { t } = useLocale();
-  const { data } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['keys'],
     queryFn: fetchKeys,
     refetchInterval: 15000,
@@ -18,13 +19,13 @@ export function KeysPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-surface-200 pb-5">
         <div>
-          <h1 className="text-2xl font-bold text-gradient">{t.keys.title}</h1>
+          <h1 className="text-xl font-semibold text-surface-900 sm:text-2xl">{t.keys.title}</h1>
           <p className="text-sm text-surface-500 mt-1">{t.keys.subtitle}</p>
         </div>
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-surface-50 border border-surface-200">
+          <div className="flex items-center gap-2 rounded-md border border-surface-200 bg-white px-3 py-2">
             <Activity size={14} className="text-emerald-500" />
             <span className="text-sm font-semibold text-surface-700">{t.keys.healthyPct.replace('{pct}', String(healthPct))}</span>
             <span className="text-xs text-surface-400">{t.keys.healthyLabel}</span>
@@ -32,13 +33,15 @@ export function KeysPage() {
         </div>
       </div>
 
-      {data?.pools.map(pool => {
+      {isLoading && <Skeleton className="h-32 w-full" />}
+      {isError && <ErrorState action={<button type="button" className="btn-secondary text-xs" onClick={() => refetch()}>{t.common.uiRetry}</button>} />}
+      {!isLoading && !isError && data?.pools.map(pool => {
         const healthy = pool.keys.filter(k => k.healthy).length;
         const total = pool.keys.length;
         const pct = total > 0 ? Math.round((healthy / total) * 100) : 0;
 
         return (
-          <div key={pool.pool_id} className="glass-card p-5">
+          <div key={pool.pool_id} className="glass-card rounded-lg p-5">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-3">
                 <div className={`w-2.5 h-2.5 rounded-full ${pct > 70 ? 'bg-emerald-500' : pct > 30 ? 'bg-amber-500' : 'bg-red-500'}`} />
@@ -51,14 +54,14 @@ export function KeysPage() {
               </div>
             </div>
 
-            <div className="grid gap-2">
+            <div className="grid gap-2" role="list">
               {pool.keys.map((key, idx) => (
                 <motion.div
                   key={key.key_hash}
                   initial={{ opacity: 0, x: -10 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: idx * 0.03 }}
-                  className={`flex items-center gap-4 p-3.5 rounded-xl border transition-all duration-200 ${
+                  className={`flex items-center gap-4 border-t border-surface-200 p-3.5 transition-colors first:border-t-0 ${
                     key.healthy
                       ? 'border-emerald-100 bg-emerald-50/50 hover:border-emerald-200'
                       : 'border-red-100 bg-red-50/50 hover:border-red-200'
@@ -96,11 +99,8 @@ export function KeysPage() {
         );
       })}
 
-      {(!data?.pools || data.pools.length === 0) && (
-        <div className="glass-card p-16 text-center text-surface-400">
-          <Activity size={32} className="mx-auto mb-3 text-surface-300" />
-          <p className="text-sm">{t.keys.noPools}</p>
-        </div>
+      {!isLoading && !isError && (!data?.pools || data.pools.length === 0) && (
+        <EmptyState title={t.keys.noPools} />
       )}
     </div>
   );

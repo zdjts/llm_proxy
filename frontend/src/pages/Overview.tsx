@@ -5,6 +5,7 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { fetchStatus, fetchTraffic, fetchAlerts, fetchKeys, fetchCost } from '@/lib/api';
 import { formatNum } from '@/lib/utils';
 import { useLocale } from '@/i18n/context';
+import { ErrorState, Skeleton } from '@/components/ui';
 
 export function Overview() {
   const { t } = useLocale();
@@ -31,6 +32,13 @@ export function Overview() {
     };
   }) ?? [];
 
+  const queries = [status, traffic, alerts, keys, cost];
+  const isLoading = queries.some(query => query.isLoading);
+  const isError = queries.some(query => query.isError);
+  const retryFailed = () => {
+    void Promise.all(queries.filter(query => query.isError).map(query => query.refetch()));
+  };
+
   const statCards = [
     { label: t.overview.totalRequests, value: cs?.total_requests ?? formatNum(s?.requests_total ?? 0), icon: Activity, color: 'text-primary-600', bg: 'bg-primary-50' },
     { label: t.overview.cacheHits, value: cs ? formatNum(cs.cached_tokens) : formatNum(s?.cache_hits ?? 0), icon: Zap, color: 'text-accent-600', bg: 'bg-accent-50' },
@@ -42,19 +50,20 @@ export function Overview() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gradient">{t.overview.title}</h1>
-        <p className="text-sm text-surface-500 mt-1">{t.overview.subtitle}</p>
+      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-surface-200 pb-5">
+        <div><div className="mb-2 text-[11px] font-medium uppercase tracking-[0.12em] text-primary-700">{t.sidebar.workspace}</div><h1 className="text-2xl font-semibold tracking-tight text-surface-900 sm:text-3xl">{t.overview.title}</h1><p className="mt-1.5 text-sm text-surface-500">{t.overview.subtitle}</p></div>
+        <div className="flex items-center gap-2 text-xs text-surface-500"><span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true" />{t.overview.subtitle}</div>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      {isLoading ? <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"><Skeleton className="h-24" /><Skeleton className="h-24" /><Skeleton className="h-24" /></div> : isError ? <ErrorState action={<button type="button" className="btn-secondary text-xs" onClick={retryFailed}>{t.common.uiRetry}</button>} /> : <>
+      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-surface-200 bg-surface-200 md:grid-cols-3 lg:grid-cols-6">
         {statCards.map((card, i) => (
           <motion.div
             key={card.label}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.05 }}
-            className="stat-card group"
+            className="group rounded-none border-0 bg-white p-4 shadow-none transition-colors hover:bg-surface-50"
           >
             <div className={`w-9 h-9 rounded-xl ${card.bg} flex items-center justify-center mb-2.5`}>
               <card.icon size={16} className={card.color} />
@@ -65,8 +74,8 @@ export function Overview() {
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="glass-card p-5">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.35fr_0.65fr]">
+        <div className="glass-card rounded-lg p-5">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-semibold text-surface-700">{t.overview.trafficTrend}</h3>
             <span className="badge badge-purple text-[11px]">{t.overview.requests}</span>
@@ -76,23 +85,23 @@ export function Overview() {
               <AreaChart data={chartData}>
                 <defs>
                   <linearGradient id="reqGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#8b5cf6" stopOpacity={0.2} />
-                    <stop offset="100%" stopColor="#8b5cf6" stopOpacity={0} />
+                    <stop offset="0%" stopColor="#b04436" stopOpacity={0.18} />
+                    <stop offset="100%" stopColor="#b04436" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e4e7f0" />
-                <XAxis dataKey="label" tick={{ fill: '#9ca3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e0d9" />
+                <XAxis dataKey="label" tick={{ fill: '#8e877d', fontSize: 11 }} axisLine={false} tickLine={false} />
                 <YAxis hide />
                 <Tooltip
                   contentStyle={{ background: 'white', border: '1px solid #e4e7f0', borderRadius: 12, color: '#374151', boxShadow: '0 4px 20px rgba(0,0,0,0.08)' }}
                 />
-                <Area type="monotone" dataKey="requests" stroke="#8b5cf6" fill="url(#reqGrad)" strokeWidth={2} />
+                <Area type="monotone" dataKey="requests" stroke="#b04436" fill="url(#reqGrad)" strokeWidth={2} />
               </AreaChart>
             </ResponsiveContainer>
           </div>
         </div>
 
-        <div className="glass-card p-5">
+        <div className="glass-card rounded-lg p-5">
           <h3 className="text-sm font-semibold text-surface-700 mb-4">{t.overview.keyHealth}</h3>
           <div className="space-y-3">
             {k?.pools.slice(0, 4).map(pool => {
@@ -123,7 +132,7 @@ export function Overview() {
       </div>
 
       {a?.events && a.events.length > 0 && (
-        <div className="glass-card p-5">
+        <div className="glass-card rounded-lg p-5">
           <h3 className="text-sm font-semibold text-surface-700 mb-3">{t.overview.recentAlerts}</h3>
           <div className="space-y-1">
             {a.events.slice(0, 5).map(evt => (
@@ -142,6 +151,7 @@ export function Overview() {
           </div>
         </div>
       )}
+      </>}
     </div>
   );
 }

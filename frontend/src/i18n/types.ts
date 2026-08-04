@@ -15,7 +15,12 @@ export interface Messages {
     clientKeys: string;
     quotas: string;
     help: string;
-    toggleBg: string;
+    configConsole: string;
+    navigation: string;
+    openNavigation: string;
+    closeNavigation: string;
+    workspace: string;
+    logout: string;
     sections: {
       main: string;
       config: string;
@@ -149,6 +154,7 @@ export interface Messages {
     title: string;
     subtitle: string;
     loading: string;
+    empty: string;
   };
   live: {
     title: string;
@@ -200,6 +206,111 @@ export interface Messages {
     noData: string;
     noDataHint: string;
   };
+  adminUi: {
+    add: string;
+    create: string;
+    edit: string;
+    delete: string;
+    cancel: string;
+    save: string;
+    retry: string;
+    actions: string;
+    confirmDelete: string;
+    noProviders: string;
+    noPools: string;
+    noRouting: string;
+    noModels: string;
+    noUsers: string;
+    unavailable: string;
+    secretHint: string;
+  };
+  configAdmin: {
+    configTitle: string;
+    configSubtitle: string;
+    exportConfig: string;
+    validateImport: string;
+    configHint: string;
+    configPlaceholder: string;
+    validate: string;
+    dryRun: string;
+    commitImport: string;
+    refresh: string;
+    confirmCommit: string;
+    yamlRequired: string;
+    notManaged: string;
+    notManagedHint: string;
+    version: string;
+    providers: string;
+    pools: string;
+    routing: string;
+    registry: string;
+    providerTitle: string;
+    providerSubtitle: string;
+    providerEmptyHint: string;
+    modelTitle: string;
+    modelSubtitle: string;
+    newModel: string;
+    enabled: string;
+    disabled: string;
+    rolesTitle: string;
+    rolesSubtitle: string;
+    budgetTitle: string;
+    budgetSubtitle: string;
+    budgetHint: string;
+    auditTitle: string;
+    auditSubtitle: string;
+    auditHint: string;
+    addProvider: string;
+    providerId: string;
+    baseUrl: string;
+    poolId: string;
+    keyPoolsTitle: string;
+    keyPoolsSubtitle: string;
+    addPool: string;
+    keyHash: string;
+    weight: string;
+    status: string;
+    apiKey: string;
+    addKey: string;
+    routingTitle: string;
+    routingSubtitle: string;
+    context: string;
+    output: string;
+    vision: string;
+    tools: string;
+    jsonMode: string;
+    yes: string;
+    no: string;
+    usersTitle: string;
+    usersCount: string;
+    addUser: string;
+    createUser: string;
+    name: string;
+    email: string;
+    password: string;
+    roles: string;
+    systemTitle: string;
+    systemSubtitle: string;
+    uptime: string;
+    totalRequests: string;
+    failedRequests: string;
+    cacheHits: string;
+    activeConnections: string;
+    retries: string;
+    keyDemotions: string;
+    upstream5xx: string;
+    upstream4xx: string;
+    alertCount: string;
+  };
+  site: {
+    nav: { product: string; models: string; documentation: string; status: string; signIn: string; openNavigation: string; closeNavigation: string; publicNavigation: string; publicMobileNavigation: string; accountNavigation: string; accountMobileNavigation: string; footerTagline: string; accountLabel: string },
+    actions: { openWorkspace: string; unavailable: string; documentation: string },
+    hero: { eyebrow: string; operationalTitle: string; operationalDescription: string; authorizationNote: string },
+    public: { aboutBody: string; modelsBody: string; modelName: string; modelStatus: string; statusBody: string; statusOperational: string; statusUnavailable: string; contactBody: string; contactSupportBody: string; docsBody: string; docsTopics: string[]; guideBody: string; unavailableBody: string },
+    account: { groups: Record<'workspace' | 'developer' | 'commercial' | 'community' | 'activities' | 'operator', string>; overviewBody: string; unavailableBody: string; unavailableAction: string; tableField: string; tableState: string; emptyState: string; editAction: string; exportAction: string; familyTitle: string; familyBody: string; familyState: string; familyAction: string; operatorTitle: string; operatorBody: string; operatorSearch: string; operatorFilter: string; operatorCreate: string; operatorExport: string },
+    routes: Record<string, { title: string; description: string; action?: string }>,
+    fallback: { title: string; description: string },
+  };
   common: {
     csv: string;
     json: string;
@@ -211,5 +322,16 @@ export interface Messages {
     placeholder_error: string;
     placeholder_tenant: string;
     switchLang: string;
+    uiClose: string;
+    uiLoading: string;
+    uiNoData: string;
+    uiUnableToLoad: string;
+    uiRetry: string;
+    uiIncreasing: string;
+    uiDecreasing: string;
+    uiUnchanged: string;
+    uiPagination: string;
+    uiPrevious: string;
+    uiNext: string;
   };
 }

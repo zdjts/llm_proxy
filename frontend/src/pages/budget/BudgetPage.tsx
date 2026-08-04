@@ -1,20 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import { Card, Skeleton, StatCard, Table, Badge } from '@/components/ui';
-import { Wallet, TrendingUp, AlertTriangle } from 'lucide-react';
+import { EmptyState, ErrorState, Skeleton } from '@/components/ui';
+import { useLocale } from '@/i18n/context';
 
 export function BudgetPage() {
-  const { data: orgs, isLoading } = useQuery({ queryKey: ['orgs'], queryFn: () => api.get('/admin/api/orgs').then(r => r.data).catch(() => ({ organizations: [] })) });
-  if (isLoading) return <Skeleton className="h-64" />;
+  const { t } = useLocale();
+  const { isLoading, isError, refetch } = useQuery({ queryKey: ['orgs'], queryFn: () => api.get('/admin/api/orgs').then(r => r.data) });
   return (
     <div className="space-y-6">
-      <div><h1 className="text-2xl font-bold text-surface-800">Budgets</h1><p className="text-sm text-surface-400 mt-1">Organization → Team → Key budget hierarchy</p></div>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <StatCard label="Total Budget" value="$1,000" icon={Wallet} trend="neutral" />
-        <StatCard label="Monthly Spend" value="$234.50" icon={TrendingUp} trend="up" />
-        <StatCard label="Alerts" value="0" icon={AlertTriangle} trend="neutral" />
-      </div>
-      <Card><p className="text-surface-400 text-sm">Budget management UI coming in next iteration. Use Admin API endpoints for now.</p></Card>
+      <div><h1 className="text-xl font-semibold text-surface-900 sm:text-2xl">{t.configAdmin.budgetTitle}</h1><p className="mt-1 text-sm text-surface-500">{t.configAdmin.budgetSubtitle}</p></div>
+      {isLoading ? <Skeleton className="h-64" /> : isError ? <ErrorState action={<button type="button" className="btn-secondary text-xs" onClick={() => refetch()}>{t.adminUi.retry}</button>} /> : <EmptyState title={t.adminUi.unavailable} description={t.configAdmin.budgetHint} />}
     </div>
   );
 }

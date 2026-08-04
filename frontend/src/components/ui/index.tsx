@@ -1,144 +1,78 @@
-// v4.1 Track L: Aurora Glass design system — Design Token extension
-// Replaces the inline glass/purple tokens already used in index.css with
-// a systematic design language: Aurora gradient backgrounds, glassmorphism
-// cards, glowing status indicators, skeleton loading, and number animations.
+import { AlertCircle, CircleAlert, LoaderCircle } from 'lucide-react';
+import type React from 'react';
+import { useLocale } from '@/i18n/context';
 
-// New design tokens appended to existing index.css tokens
-
-import React from 'react';
-
-// ── Shared UI component stubs — to be fleshed out in T203-T209 ──
-
-// Glass card wrapper
-export function Card({ children, className = '', ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return (
-    <div className={`glass rounded-xl border border-white/20 p-6 backdrop-blur-xl bg-white/70 shadow-lg shadow-black/5 ${className}`} {...props}>
-      {children}
-    </div>
-  );
+function join(...classes: Array<string | undefined>) {
+  return classes.filter(Boolean).join(' ');
 }
 
-// KPI stat card with count-up animation
-export function StatCard({
-  label, value, prefix = '', suffix = '', icon: Icon, trend,
-}: {
-  label: string; value: string | number; prefix?: string; suffix?: string;
-  icon?: React.ComponentType<{ size?: number; className?: string }>; trend?: 'up' | 'down' | 'neutral';
+export function PageHeader({ title, description, actions, className }: {
+  title: string;
+  description?: string;
+  actions?: React.ReactNode;
+  className?: string;
 }) {
-  const trendColors = { up: 'text-green-500', down: 'text-red-500', neutral: 'text-surface-400' };
-  return (
-    <div className="glass rounded-xl border border-white/20 p-5 backdrop-blur-xl bg-white/70">
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-xs font-medium text-surface-400 uppercase tracking-wider">{label}</span>
-        {Icon && <Icon size={16} className="text-primary-400" />}
-      </div>
-      <div className="text-2xl font-bold text-surface-800 tabular-nums">
-        {prefix}{typeof value === 'number' ? value.toLocaleString() : value}{suffix}
-      </div>
-      {trend && <div className={`text-xs mt-1 ${trendColors[trend]}`}>{trend === 'up' ? '↑' : trend === 'down' ? '↓' : '→'}</div>}
-    </div>
-  );
+  return <div className={join('flex flex-wrap items-start justify-between gap-4', className)}><div><h1 className="text-xl font-semibold text-surface-900 sm:text-2xl">{title}</h1>{description && <p className="mt-1 text-sm text-surface-500">{description}</p>}</div>{actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}</div>;
 }
 
-// Modal dialog
+export function Card({ children, className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  return <div className={join('rounded-xl border border-surface-200 bg-white p-5 shadow-sm', className)} {...props}>{children}</div>;
+}
+
+export function StatCard({ label, value, prefix = '', suffix = '', icon: Icon, trend, className }: {
+  label: string; value: string | number; prefix?: string; suffix?: string;
+  icon?: React.ComponentType<{ size?: number; className?: string }>;
+  trend?: 'up' | 'down' | 'neutral'; className?: string;
+}) {
+  const { t } = useLocale();
+  const trendText = trend === 'up' ? 'text-success-dark' : trend === 'down' ? 'text-danger-dark' : 'text-surface-400';
+  const trendLabel = trend === 'up' ? t.common.uiIncreasing : trend === 'down' ? t.common.uiDecreasing : t.common.uiUnchanged;
+  return <Card className={join('p-4', className)}><div className="mb-3 flex items-center justify-between"><span className="font-operational text-[10px] font-medium uppercase text-surface-400">{label}</span>{Icon && <Icon size={16} className="text-surface-500" aria-hidden="true" />}</div><div className="font-operational text-xl font-semibold text-surface-900">{prefix}{typeof value === 'number' ? value.toLocaleString() : value}{suffix}</div>{trend && <div className={join('mt-1 text-xs', trendText)}>{trendLabel}</div>}</Card>;
+}
+
 export function Modal({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: React.ReactNode }) {
+  const { t } = useLocale();
   if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" onClick={onClose}>
-      <div className="glass rounded-2xl border border-white/20 p-6 w-full max-w-md mx-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-surface-800">{title}</h2>
-          <button onClick={onClose} className="text-surface-400 hover:text-surface-600 text-xl leading-none">&times;</button>
-        </div>
-        {children}
-      </div>
-    </div>
-  );
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-surface-900/35 p-4" role="presentation" onMouseDown={onClose}><div className="w-full max-w-md rounded-xl border border-surface-200 bg-white p-5 shadow-xl" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}><div className="mb-4 flex items-center justify-between gap-4"><h2 className="text-base font-semibold text-surface-900">{title}</h2><button type="button" onClick={onClose} className="rounded-md px-2 py-1 text-sm text-surface-500 hover:bg-surface-100 hover:text-surface-800" aria-label={t.common.uiClose}>{t.common.uiClose}</button></div>{children}</div></div>;
 }
 
-// Skeleton loading placeholder
-export function Skeleton({ className = '' }: { className?: string }) {
-  return <div className={`animate-pulse bg-surface-200 rounded ${className}`} />;
+export function Skeleton({ className }: { className?: string }) {
+  const { t } = useLocale();
+  return <div className={join('animate-pulse rounded-md bg-surface-100', className)} aria-label={t.common.uiLoading} />;
 }
 
-// Empty state with illustration
-export function EmptyState({ title, description, action }: { title: string; description?: string; action?: React.ReactNode }) {
-  return (
-    <div className="flex flex-col items-center justify-center py-16 text-center">
-      <div className="w-16 h-16 rounded-full bg-surface-100 flex items-center justify-center mb-4">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-surface-300">
-          <rect x="3" y="3" width="18" height="18" rx="2" />
-          <path d="M12 8v4M12 16h.01" />
-        </svg>
-      </div>
-      <h3 className="text-lg font-medium text-surface-600 mb-1">{title}</h3>
-      {description && <p className="text-sm text-surface-400 max-w-sm">{description}</p>}
-      {action && <div className="mt-4">{action}</div>}
-    </div>
-  );
+export function EmptyState({ title, description, action, className }: { title: string; description?: string; action?: React.ReactNode; className?: string }) {
+  return <div className={join('flex flex-col items-center justify-center border border-dashed border-surface-200 px-6 py-14 text-center', className)}><CircleAlert size={24} className="mb-3 text-surface-400" aria-hidden="true" /><h3 className="text-sm font-semibold text-surface-700">{title}</h3>{description && <p className="mt-1 max-w-sm text-sm text-surface-500">{description}</p>}{action && <div className="mt-4">{action}</div>}</div>;
 }
 
-// Badge
-export function Badge({ children, variant = 'default' }: { children: React.ReactNode; variant?: 'default' | 'success' | 'warning' | 'danger' | 'info' }) {
-  const colors: Record<string, string> = {
-    default: 'bg-surface-100 text-surface-600', success: 'bg-green-100 text-green-700',
-    warning: 'bg-amber-100 text-amber-700', danger: 'bg-red-100 text-red-700', info: 'bg-blue-100 text-blue-700',
-  };
-  return <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${colors[variant]}`}>{children}</span>;
+export function ErrorState({ title, description, action, className }: { title?: string; description?: string; action?: React.ReactNode; className?: string }) {
+  const { t } = useLocale();
+  return <div className={join('flex flex-col items-center justify-center border border-danger-light bg-primary-50 px-6 py-10 text-center', className)}><AlertCircle size={22} className="mb-3 text-danger" aria-hidden="true" /><h3 className="text-sm font-semibold text-danger-dark">{title || t.common.uiUnableToLoad}</h3>{description && <p className="mt-1 max-w-sm text-sm text-surface-600">{description}</p>}{action && <div className="mt-4">{action}</div>}</div>;
 }
 
-// Status dot with glow
+export function Badge({ children, variant = 'default', className }: { children: React.ReactNode; variant?: 'default' | 'success' | 'warning' | 'danger' | 'info'; className?: string }) {
+  const colors = { default: 'bg-surface-100 text-surface-600', success: 'bg-success-light text-success-dark', warning: 'bg-warning-light text-warning-dark', danger: 'bg-danger-light text-danger-dark', info: 'bg-info-light text-info-dark' };
+  return <span className={join('inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium', colors[variant], className)}>{children}</span>;
+}
+
 export function StatusDot({ status }: { status: 'healthy' | 'unhealthy' | 'probing' | 'unknown' }) {
-  const colors: Record<string, string> = {
-    healthy: 'bg-green-400 shadow-[0_0_8px_rgba(34,197,94,0.5)]',
-    unhealthy: 'bg-red-400 shadow-[0_0_8px_rgba(239,68,68,0.5)]',
-    probing: 'bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.5)] animate-pulse',
-    unknown: 'bg-gray-400',
-  };
-  return <span className={`inline-block w-2.5 h-2.5 rounded-full ${colors[status]}`} />;
+  const colors = { healthy: 'bg-success', unhealthy: 'bg-danger', probing: 'bg-warning animate-pulse', unknown: 'bg-surface-400' };
+  return <span className={join('inline-block h-2 w-2 rounded-full', colors[status])} aria-label={status} />;
 }
 
-// Table with glass styling
-export function Table({ headers, rows, emptyMessage = 'No data' }: { headers: string[]; rows: (string | React.ReactNode)[][]; emptyMessage?: string }) {
-  return (
-    <div className="overflow-x-auto rounded-xl border border-surface-200">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="bg-surface-50 border-b border-surface-200">
-            {headers.map((h, i) => <th key={i} className="text-left px-4 py-3 font-medium text-surface-500 text-xs uppercase tracking-wider">{h}</th>)}
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-surface-100">
-          {rows.length === 0 ? (
-            <tr><td colSpan={headers.length} className="px-4 py-8 text-center text-surface-400">{emptyMessage}</td></tr>
-          ) : rows.map((row, i) => (
-            <tr key={i} className="hover:bg-surface-50/50 transition-colors">
-              {row.map((cell, j) => <td key={j} className="px-4 py-3 text-surface-700">{cell}</td>)}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+export function Table({ headers, rows, emptyMessage }: { headers: string[]; rows: React.ReactNode[][]; emptyMessage?: string }) {
+  const { t } = useLocale();
+  return <div className="overflow-x-auto rounded-lg border border-surface-200"><table className="min-w-full text-sm"><thead className="bg-surface-50"><tr>{headers.map((header) => <th key={header} scope="col" className="whitespace-nowrap border-b border-surface-200 px-4 py-3 text-left font-operational text-[10px] font-medium uppercase text-surface-500">{header}</th>)}</tr></thead><tbody className="divide-y divide-surface-200 bg-white">{rows.length === 0 ? <tr><td colSpan={headers.length} className="px-4 py-10 text-center text-sm text-surface-500">{emptyMessage || t.common.uiNoData}</td></tr> : rows.map((row, index) => <tr key={index} className="hover:bg-surface-50">{row.map((cell, cellIndex) => <td key={cellIndex} className="whitespace-nowrap px-4 py-3 text-surface-700">{cell}</td>)}</tr>)}</tbody></table></div>;
 }
 
-// Button variants
-export function Button({ children, variant = 'primary', size = 'md', disabled, loading, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'secondary' | 'danger' | 'ghost'; size?: 'sm' | 'md' | 'lg'; loading?: boolean }) {
-  const bases: Record<string, string> = {
-    primary: 'bg-primary-600 hover:bg-primary-700 text-white shadow-sm',
-    secondary: 'bg-surface-100 hover:bg-surface-200 text-surface-700 border border-surface-200',
-    danger: 'bg-red-600 hover:bg-red-700 text-white',
-    ghost: 'hover:bg-surface-100 text-surface-600',
-  };
-  const sizes: Record<string, string> = { sm: 'px-3 py-1.5 text-xs', md: 'px-4 py-2 text-sm', lg: 'px-6 py-3 text-base' };
-  return (
-    <button
-      className={`inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ${bases[variant]} ${sizes[size]}`}
-      disabled={disabled || loading}
-      {...props}
-    >
-      {loading && <span className="inline-block w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />}
-      {children}
-    </button>
-  );
+export function Pagination({ page, pageCount, onPageChange, className }: { page: number; pageCount: number; onPageChange: (page: number) => void; className?: string }) {
+  const { t } = useLocale();
+  if (pageCount <= 1) return null;
+  return <nav className={join('flex items-center justify-between gap-3', className)} aria-label={t.common.uiPagination}><span className="font-operational text-xs text-surface-500">{page} / {pageCount}</span><div className="flex gap-2"><Button variant="secondary" size="sm" onClick={() => onPageChange(page - 1)} disabled={page <= 1}>{t.common.uiPrevious}</Button><Button variant="secondary" size="sm" onClick={() => onPageChange(page + 1)} disabled={page >= pageCount}>{t.common.uiNext}</Button></div></nav>;
+}
+
+export function Button({ children, variant = 'primary', size = 'md', disabled, loading, className, type = 'button', ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'secondary' | 'danger' | 'ghost'; size?: 'sm' | 'md' | 'lg'; loading?: boolean }) {
+  const variants = { primary: 'bg-primary-600 text-white hover:bg-primary-700', secondary: 'border border-surface-200 bg-white text-surface-700 hover:bg-surface-100', danger: 'bg-danger text-white hover:bg-danger-dark', ghost: 'text-surface-600 hover:bg-surface-100 hover:text-surface-900' };
+  const sizes = { sm: 'px-2.5 py-1.5 text-xs', md: 'px-3 py-2 text-sm', lg: 'px-4 py-2.5 text-sm' };
+  return <button type={type} className={join('inline-flex items-center justify-center gap-2 rounded-md font-medium transition-colors disabled:pointer-events-none disabled:opacity-50', variants[variant], sizes[size], className)} disabled={disabled || loading} aria-busy={loading || undefined} {...props}>{loading && <LoaderCircle size={15} className="animate-spin" aria-hidden="true" />}{children}</button>;
 }

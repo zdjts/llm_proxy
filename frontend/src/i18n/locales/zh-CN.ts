@@ -1,5 +1,14 @@
 import type { Messages } from '../types';
 
+const siteRouteKeys = ['home', 'about', 'models', 'modelPlaza', 'networkStatus', 'status', 'login', 'register', 'forgotPassword', 'contact', 'contactSupport', 'docs', 'batchImage', 'claudeCode', 'codex', 'accountOverview', 'profile', 'usage', 'requestHistory', 'apiKeys', 'keyUsage', 'availableModels', 'availableChannels', 'groups', 'accountSettings', 'announcements', 'auditEvents', 'errorEvents', 'subscriptions', 'purchase', 'recharge', 'paymentResult', 'receipt', 'paymentPlans', 'coupons', 'redeem', 'orders', 'balanceHistory', 'proxies', 'endpointDistribution', 'promptAudit', 'riskControl', 'channelMonitor', 'channelStatus', 'affiliate', 'agentTeam', 'agentContact', 'withdrawals', 'arena', 'arenaWinners', 'quiz', 'quizStats', 'blindBox', 'blindBoxManagement', 'blindBoxProbability', 'achievements', 'badges', 'checkIn', 'operationsDashboard', 'operatorUsers', 'operatorAccounts', 'operatorGroups', 'operatorChannels', 'operatorOrders', 'paymentDashboard', 'operatorPaymentPlans', 'affiliateInvites', 'affiliateRebates', 'affiliateTransfers', 'affiliateRecords', 'agentApplications', 'agentConfiguration', 'agentList', 'agentWithdrawals', 'operatorAuditLog', 'operatorErrorLog'];
+const siteRoutes: Messages['site']['routes'] = Object.fromEntries(siteRouteKeys.map((key) => [key, { title: '功能暂不可用', description: '此功能在当前部署中暂不可用。' }]));
+Object.assign(siteRoutes, {
+  home: { title: 'LLM Proxy', description: '面向团队的实用语言模型提供商网关。' }, about: { title: '关于 LLM Proxy', description: '了解网关如何让提供商运维保持可观测和可控。' }, models: { title: '模型目录', description: '浏览此网关已配置的模型能力。' }, modelPlaza: { title: '模型工作区', description: '探索以模型为中心的工作流。' }, networkStatus: { title: '网络状态', description: '查看服务网络可用性。' }, status: { title: '服务状态', description: '查看运行状态信息。' }, login: { title: '登录', description: '登录 LLM Proxy 工作区。' }, register: { title: '创建账户', description: '当前部署不支持账户注册。', action: '注册暂不可用' }, forgotPassword: { title: '重置密码', description: '当前部署不支持密码重置。', action: '密码重置暂不可用' }, contact: { title: '联系', description: '请联系工作区管理员。' }, contactSupport: { title: '联系支持', description: '当前部署未配置支持联系方式。' }, docs: { title: '文档', description: '阅读 LLM Proxy 运维文档。' }, batchImage: { title: '批量图像指南', description: '当前部署不支持批量图像工作流。' }, claudeCode: { title: 'Claude Code', description: '当前部署未提供集成指南。' }, codex: { title: 'Codex', description: '当前部署未提供集成指南。' },
+  accountOverview: { title: '账户概览', description: '此网关未提供账户工作区。' }, profile: { title: '个人资料', description: '当前部署不支持个人资料管理。' }, usage: { title: '用量', description: '当前部署不支持个人用量报告。' }, requestHistory: { title: '请求历史', description: '当前部署不支持个人请求历史。' }, apiKeys: { title: 'API 密钥', description: '当前部署不支持个人 API 密钥管理。' }, keyUsage: { title: '密钥用量', description: '当前部署不支持个人密钥用量报告。' }, availableModels: { title: '可用模型', description: '当前部署不支持个人模型可用性。' }, availableChannels: { title: '可用渠道', description: '当前部署不支持渠道可用性。' }, groups: { title: '分组', description: '当前部署不支持分组管理。' }, accountSettings: { title: '账户设置', description: '当前部署不支持账户设置。' }, announcements: { title: '公告', description: '当前部署不支持公告。' }, auditEvents: { title: '审计事件', description: '当前部署不支持个人审计事件。' }, errorEvents: { title: '错误事件', description: '当前部署不支持个人错误事件。' },
+  subscriptions: { title: '订阅', description: '当前部署不支持订阅管理。', action: '订阅暂不可用' }, purchase: { title: '购买', description: '当前部署不支持购买。', action: '购买暂不可用' }, recharge: { title: '充值', description: '当前部署不支持充值。', action: '充值暂不可用' }, redeem: { title: '兑换', description: '当前部署不支持兑换。', action: '兑换暂不可用' }, withdrawals: { title: '提现', description: '当前部署不支持提现。', action: '提现暂不可用' }, checkIn: { title: '签到', description: '当前部署不支持签到。', action: '签到暂不可用' },
+  operationsDashboard: { title: '运维仪表板', description: '当前部署不支持运营方仪表板。' }, operatorUsers: { title: '运维用户', description: '当前部署不支持运营方用户管理。' }, operatorAccounts: { title: '运维账户', description: '当前部署不支持运营方账户管理。' }, operatorGroups: { title: '运维分组', description: '当前部署不支持运营方分组管理。' }, operatorChannels: { title: '运维渠道', description: '当前部署不支持运营方渠道管理。' }, operatorOrders: { title: '运维订单', description: '当前部署不支持运营方订单管理。' }, paymentDashboard: { title: '支付仪表板', description: '当前部署不支持支付仪表板。' }, operatorPaymentPlans: { title: '运维支付计划', description: '当前部署不支持支付计划管理。' }, affiliateInvites: { title: '推广邀请', description: '当前部署不支持推广管理。' }, affiliateRebates: { title: '推广返利', description: '当前部署不支持推广管理。' }, affiliateTransfers: { title: '推广转账', description: '当前部署不支持推广管理。' }, affiliateRecords: { title: '推广记录', description: '当前部署不支持推广管理。' }, agentApplications: { title: '代理申请', description: '当前部署不支持代理管理。' }, agentConfiguration: { title: '代理配置', description: '当前部署不支持代理管理。' }, agentList: { title: '代理列表', description: '当前部署不支持代理管理。' }, agentWithdrawals: { title: '代理提现', description: '当前部署不支持代理管理。' }, operatorAuditLog: { title: '运维审计日志', description: '当前部署不支持运营方审计日志。' }, operatorErrorLog: { title: '运维错误日志', description: '当前部署不支持运营方错误日志。' },
+});
+
 const zhCN: Messages = {
   sidebar: {
     brand: 'LLM 代理',
@@ -15,7 +24,12 @@ const zhCN: Messages = {
     clientKeys: '客户端密钥',
     quotas: '配额',
     help: '帮助',
-    toggleBg: '切换背景',
+    configConsole: '配置控制台',
+    navigation: '主导航',
+    openNavigation: '打开导航',
+    closeNavigation: '关闭导航',
+    workspace: '运维工作区',
+    logout: '退出登录',
     sections: { main: '主菜单', config: '配置', monitor: '监控', admin: '管理', settings: '设置' },
     providers: '服务商',
     keyPools: '密钥池',
@@ -143,6 +157,7 @@ const zhCN: Messages = {
     title: '帮助 & 文档',
     subtitle: 'RUNBOOK.md — 运维指南',
     loading: '加载文档中...',
+    empty: '暂无可用文档。'
   },
   live: {
     title: '实时流',
@@ -194,6 +209,36 @@ const zhCN: Messages = {
     noData: '无配额数据',
     noDataHint: '配额追踪可能未在配置中启用',
   },
+  adminUi: {
+    add: '添加',
+    create: '创建',
+    edit: '编辑',
+    delete: '删除',
+    cancel: '取消',
+    save: '保存',
+    retry: '重试',
+    actions: '操作',
+    confirmDelete: '删除此项目？此操作无法撤销。',
+    noProviders: '暂无已配置的提供商',
+    noPools: '暂无已配置的密钥池',
+    noRouting: '暂无已配置的路由规则',
+    noModels: '暂无已配置的模型',
+    noUsers: '暂无已配置的用户',
+    unavailable: '该能力暂未在管理台中提供。',
+    secretHint: '密钥仅在提交时发送，提交后会被清除。',
+  },
+  configAdmin: {
+    configTitle: '配置控制台', configSubtitle: '管理由 SQLite 承载的提供商、密钥池、路由和目录数据。', exportConfig: '导出配置', validateImport: '验证、预演和导入 YAML', configHint: '此文本会发送到管理 API。验证和预演不会修改数据库。', configPlaceholder: '在此粘贴明确的配置文档...', validate: '验证', dryRun: '预演', commitImport: '提交导入', refresh: '刷新数据库', confirmCommit: '将已验证的配置提交到 SQLite？', yamlRequired: '请先输入 YAML 再验证或导入。', notManaged: '此控制台不管理', notManagedHint: '启动配置策略和客户端认证不可在此编辑，且不会显示明文密钥。', version: '版本', providers: '提供商', pools: '密钥池', routing: '路由', registry: '目录', providerTitle: '提供商', providerSubtitle: '管理上游提供商配置。', providerEmptyHint: '添加上游提供商以开始路由请求。', modelTitle: '模型目录', modelSubtitle: '管理注册表元数据和可用性。', newModel: '新建模型', enabled: '已启用', disabled: '已禁用', rolesTitle: '角色', rolesSubtitle: '内置 RBAC 角色及其权限。', budgetTitle: '预算', budgetSubtitle: '组织、团队和密钥预算层级。', budgetHint: '预算管理仍可通过管理 API 使用。', auditTitle: '审计日志', auditSubtitle: '跟踪配置更改和敏感操作。', auditHint: '审计事件仍可通过管理 API 使用。', addProvider: '添加提供商', providerId: '提供商 ID', baseUrl: '基础 URL', poolId: '密钥池 ID', keyPoolsTitle: '密钥池', keyPoolsSubtitle: '管理上游 API 密钥池。', addPool: '添加密钥池', keyHash: '密钥哈希', weight: '权重', status: '状态', apiKey: 'API 密钥', addKey: '添加密钥', routingTitle: '模型路由', routingSubtitle: '将逻辑模型名称映射到上游密钥池。', context: '上下文', output: '输出', vision: '视觉', tools: '工具', jsonMode: 'JSON', yes: '是', no: '否', usersTitle: '用户', usersCount: '{count} 位用户', addUser: '添加用户', createUser: '创建用户', name: '姓名', email: '邮箱', password: '密码', roles: '角色', systemTitle: '系统', systemSubtitle: '网关状态与配置。', uptime: '运行时间（秒）', totalRequests: '请求总数', failedRequests: '失败请求', cacheHits: '缓存命中', activeConnections: '活跃连接', retries: '重试次数', keyDemotions: '密钥降级', upstream5xx: '上游 5xx', upstream4xx: '上游 4xx', alertCount: '告警数量',
+  },
+  site: {
+    nav: { product: '产品', models: '模型', documentation: '文档', status: '状态', signIn: '登录', openNavigation: '打开导航', closeNavigation: '关闭导航', publicNavigation: '公开导航', publicMobileNavigation: '公开移动导航', accountNavigation: '账户导航', accountMobileNavigation: '账户移动导航', footerTagline: '自托管运维网关', accountLabel: '账户' },
+    actions: { openWorkspace: '打开工作区', unavailable: '暂不可用', documentation: '文档' },
+    hero: { eyebrow: 'LLM Proxy', operationalTitle: '为运维而设计', operationalDescription: '在同一自托管工作区中管理上游路由、请求可见性和管理控制。', authorizationNote: '现有服务器授权仍然有效。' },
+    public: { aboutBody: 'LLM Proxy 是面向团队的自托管网关，帮助团队在多个语言模型提供商之间保持可预测的路由和清晰的运维可见性。', modelsBody: '认证运维人员配置提供商目录后，模型目录才会提供可用信息。', modelName: '已配置的提供商目录', modelStatus: '由后端支持的可用性', statusBody: '当前网关 API 未公开服务状态数据。', statusOperational: '网关界面可用', statusUnavailable: '上游状态不可用', contactBody: '当前部署未连接公开提交端点，因此联系流程保持关闭。', contactSupportBody: '支持联系方式需要由工作区管理员提供。', docsBody: '使用运维手册和提供商指南操作此网关。', docsTopics: ['路由与故障转移', '密钥健康与排除', '请求审计数据'], guideBody: '当前部署未提供此集成指南。', unavailableBody: '由于没有受支持的后端流程，此页面保持不可操作。' },
+    account: { groups: { workspace: '工作区', developer: '开发者', commercial: '商业', community: '社区', activities: '活动', operator: '运营方' }, overviewBody: '账户界面已为受支持的用户 API 准备就绪，但当前网关未提供账户记录。', unavailableBody: '当前部署不支持此账户工作流。', unavailableAction: '暂不可用', tableField: '字段', tableState: '状态', emptyState: '暂无可用账户数据。', editAction: '编辑暂不可用', exportAction: '导出暂不可用', familyTitle: '服务暂不可用', familyBody: '当前部署没有支持此视觉工作区的后端服务。', familyState: '暂无可用记录', familyAction: '操作暂不可用', operatorTitle: '运营工作区', operatorBody: '当前部署未公开特权记录。', operatorSearch: '搜索暂不可用', operatorFilter: '筛选暂不可用', operatorCreate: '创建暂不可用', operatorExport: '导出暂不可用' },
+    fallback: { title: '页面暂不可用', description: '此路由在当前部署中不可用。' },
+    routes: siteRoutes,
+  },
   common: {
     csv: 'CSV',
     json: 'JSON',
@@ -205,6 +250,17 @@ const zhCN: Messages = {
     placeholder_error: '错误码',
     placeholder_tenant: '租户',
     switchLang: '切换语言',
+    uiClose: '关闭',
+    uiLoading: '加载中',
+    uiNoData: '暂无数据',
+    uiUnableToLoad: '数据加载失败',
+    uiRetry: '重试',
+    uiIncreasing: '上升',
+    uiDecreasing: '下降',
+    uiUnchanged: '无变化',
+    uiPagination: '分页',
+    uiPrevious: '上一页',
+    uiNext: '下一页',
   },
 };
 

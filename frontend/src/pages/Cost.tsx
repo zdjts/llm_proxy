@@ -5,12 +5,13 @@ import { fetchCost } from '@/lib/api';
 import { Download } from 'lucide-react';
 import { csvDownload } from '@/lib/utils';
 import { useLocale } from '@/i18n/context';
+import { EmptyState, ErrorState, Skeleton } from '@/components/ui';
 
 export function CostPage() {
   const { t } = useLocale();
   const [tenant, setTenant] = useState('');
   const [hours, setHours] = useState(24);
-  const { data } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['cost', tenant, hours],
     queryFn: () => fetchCost(tenant || undefined, hours),
     refetchInterval: 60000,
@@ -30,9 +31,9 @@ export function CostPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-surface-200 pb-5">
         <div>
-          <h1 className="text-2xl font-bold text-gradient">{t.cost.title}</h1>
+          <h1 className="text-xl font-semibold text-surface-900 sm:text-2xl">{t.cost.title}</h1>
           <p className="text-sm text-surface-500 mt-1">{t.cost.subtitle}</p>
         </div>
         <div className="flex gap-2">
@@ -49,8 +50,8 @@ export function CostPage() {
         </div>
       </div>
 
-      {data?.stats && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      {!isLoading && !isError && data?.stats && (
+        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-surface-200 bg-surface-200 md:grid-cols-4">
           {[
             { label: t.cost.requests24h, value: data.stats.total_requests, key: 'req' },
             { label: t.cost.estCost, value: data.stats.total_cost, key: 'cost' },
@@ -61,7 +62,7 @@ export function CostPage() {
             { label: t.cost.completionTokens, value: data.stats.completion_tokens.toLocaleString(), key: 'completion' },
             { label: t.cost.cachedTokens, value: data.stats.cached_tokens.toLocaleString(), key: 'cached' },
           ].map((s, i) => (
-            <motion.div key={s.key} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.06 }} className="stat-card">
+            <motion.div key={s.key} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.06 }} className="rounded-none border-0 bg-white p-4 shadow-none">
               <div className="text-[11px] text-surface-400 uppercase tracking-wider">{s.label}</div>
               <div className="text-2xl font-bold text-surface-800 mt-1">{s.value}</div>
             </motion.div>
@@ -69,11 +70,11 @@ export function CostPage() {
         </div>
       )}
 
-      <div className="glass-card overflow-hidden">
+      {isLoading ? <Skeleton className="h-32 w-full" /> : isError ? <ErrorState action={<button type="button" className="btn-secondary text-xs" onClick={() => refetch()}>{t.common.uiRetry}</button>} /> : <div className="glass-card rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-surface-100 bg-surface-50/50">
+            <thead className="bg-surface-50">
+              <tr className="border-b border-surface-200">
                 <th className="text-left p-3 text-xs text-surface-400 uppercase font-semibold">{t.cost.thModel}</th>
                 <th className="text-left p-3 text-xs text-surface-400 uppercase font-semibold">{t.cost.thPool}</th>
                 <th className="text-right p-3 text-xs text-surface-400 uppercase font-semibold">{t.cost.thPrompt}</th>
@@ -98,12 +99,12 @@ export function CostPage() {
                 </tr>
               ))}
               {(!data?.rows || data.rows.length === 0) && (
-                <tr><td colSpan={8} className="p-10 text-center text-surface-400">{t.cost.noData}</td></tr>
+                <tr><td colSpan={8} className="p-10"><EmptyState title={t.cost.noData} /></td></tr>
               )}
             </tbody>
           </table>
         </div>
-      </div>
+      </div>}
     </div>
   );
 }

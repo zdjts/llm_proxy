@@ -1,32 +1,38 @@
-import { LogOut, User } from 'lucide-react';
+import type { RefObject } from 'react';
+import { LogOut, Menu, User } from 'lucide-react';
 import { useAuthStore } from '@/stores/authStore';
 import { useNavigate } from 'react-router-dom';
+import { useLocale } from '@/i18n/context';
 
-export function TopBar() {
+interface Props {
+  menuButtonRef: RefObject<HTMLButtonElement | null>;
+  onMenuClick: () => void;
+}
+
+export function TopBar({ menuButtonRef, onMenuClick }: Props) {
   const { user, logout, isAuthenticated } = useAuthStore();
+  const { t } = useLocale();
   const navigate = useNavigate();
 
   if (!isAuthenticated || !user) return null;
 
   return (
-    <div className="h-12 border-b border-surface-200 glass flex items-center justify-between px-6 sticky top-0 z-40">
-      <div />
-      <div className="flex items-center gap-3">
-        <div className="flex items-center gap-2 text-sm text-surface-600">
-          <div className="w-6 h-6 rounded-full bg-primary-100 flex items-center justify-center">
-            <User size={12} className="text-primary-600" />
-          </div>
-          <span className="font-medium">{user.name}</span>
-          <span className="text-surface-300 text-xs">({user.roles.join(', ')})</span>
+    <header className="sticky top-0 z-30 flex h-[68px] items-center justify-between border-b border-surface-200 bg-white/95 px-4 backdrop-blur sm:px-6 lg:px-9">
+      <button ref={menuButtonRef} type="button" onClick={onMenuClick} className="rounded-md p-2 text-surface-600 hover:bg-surface-100 hover:text-surface-900 lg:hidden" aria-label={t.sidebar.openNavigation}>
+        <Menu size={19} aria-hidden="true" />
+      </button>
+      <div className="hidden lg:block"><div className="text-sm font-semibold text-surface-800">{t.overview.title}</div><div className="mt-0.5 text-xs text-surface-400">{t.sidebar.workspace}</div></div>
+      <div className="ml-auto flex min-w-0 items-center gap-3">
+        <div className="flex min-w-0 items-center gap-2 text-sm text-surface-600">
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-surface-100 text-surface-600"><User size={14} aria-hidden="true" /></div>
+          <span className="max-w-32 truncate font-medium text-surface-800 sm:max-w-48">{user.name}</span>
+          <span className="hidden max-w-48 truncate font-operational text-[10px] text-surface-400 md:inline">{user.roles.join(', ')}</span>
         </div>
-        <button
-          onClick={() => { logout(); navigate('/login'); }}
-          className="flex items-center gap-1 text-xs text-surface-400 hover:text-red-500 transition-colors"
-        >
-          <LogOut size={14} />
-          <span>Logout</span>
+        <button type="button" onClick={() => { logout(); navigate('/login'); }} className="inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium text-surface-500 hover:bg-primary-50 hover:text-primary-800" aria-label={t.sidebar.logout}>
+          <LogOut size={15} aria-hidden="true" />
+          <span className="hidden sm:inline">{t.sidebar.logout}</span>
         </button>
       </div>
-    </div>
+    </header>
   );
 }

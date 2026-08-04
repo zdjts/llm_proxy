@@ -1,59 +1,33 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
-import { ParticleBackground } from './ParticleBackground';
-import { useLocale } from '@/i18n/context';
 
 export function Layout() {
-  const [collapsed, setCollapsed] = useState(false);
-  const [bgIndex, setBgIndex] = useState(() => {
-    const saved = localStorage.getItem('dashboard-bg-index');
-    return saved ? parseInt(saved) : 0;
-  });
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const wasMobileNavOpen = useRef(false);
+  const location = useLocation();
 
+  const openMobileNav = () => setMobileNavOpen(true);
+  const closeMobileNav = () => setMobileNavOpen(false);
+
+  useEffect(() => { setMobileNavOpen(false); }, [location.pathname]);
   useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'b') { e.preventDefault(); setCollapsed(c => !c); }
-    };
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') closeMobileNav(); };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
   }, []);
+  useEffect(() => {
+    if (!mobileNavOpen && wasMobileNavOpen.current) menuButtonRef.current?.focus();
+    wasMobileNavOpen.current = mobileNavOpen;
+  }, [mobileNavOpen]);
 
-  const toggleBg = () => {
-    const next = (bgIndex + 1) % 3;
-    setBgIndex(next);
-    localStorage.setItem('dashboard-bg-index', String(next));
-  };
-
-  const { t } = useLocale();
-
-  return (
-    <div className="relative min-h-screen bg-gradient-to-br from-surface-50 via-white to-primary-50/30">
-      <ParticleBackground variant={bgIndex} />
-      <div className="relative z-10 flex">
-        <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(c => !c)} />
-        <div className={`flex-1 flex flex-col transition-all duration-300 min-h-screen ${collapsed ? 'ml-16' : 'ml-56'}`}>
-          <TopBar />
-          <main className="flex-1 p-6">
-            <div className="max-w-[1600px] mx-auto">
-              <AnimatePresence mode="wait">
-                <motion.div
-                  key={location.pathname}
-                  initial={{ opacity: 0, y: 20, scale: 0.98 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: -10, scale: 0.98 }}
-                  transition={{ duration: 0.3 }}
-                >
-                  <Outlet />
-                </motion.div>
-              </AnimatePresence>
-            </div>
-          </main>
-        </div>
-      </div>
-      <button onClick={toggleBg} className="fixed bottom-4 right-4 z-50 w-8 h-8 rounded-full glass flex items-center justify-center text-xs text-primary-400 hover:text-primary-600 transition-colors" title={t.sidebar.toggleBg}>BG</button>
+  return <div className="min-h-screen bg-[#f6f7f9] text-surface-800">
+    <Sidebar mobileOpen={mobileNavOpen} onMobileClose={closeMobileNav} />
+    <div className="min-h-screen lg:pl-[248px]">
+      <TopBar menuButtonRef={menuButtonRef} onMenuClick={openMobileNav} />
+      <main className="min-w-0 px-4 py-5 sm:px-6 lg:px-9 lg:py-8"><div className="mx-auto max-w-[1440px]"><Outlet /></div></main>
     </div>
-  );
+  </div>;
 }
