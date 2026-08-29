@@ -1,4 +1,7 @@
 //! Request handler — split from server/mod.rs (Module C2 — v2.0).
+//!
+//! Failover/retry across keys is here and in `router`, not in `Provider::chat`.
+//! Server/router match only `Arc<dyn Provider>`. SSE stays in `sse_relay`.
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};

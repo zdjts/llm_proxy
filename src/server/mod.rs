@@ -90,6 +90,9 @@ pub fn build_router(
             axum::routing::get(crate::health_check::health_ready),
         );
 
+    // Request pipeline (outer → inner): request_id → auth → body_size →
+    // quota → rate_limit → handler. Failover/retry lives in the handler/router,
+    // never in Provider::chat. Layers are applied inner-first (tower onion).
     let api = if let Some(rl) = rate_limiter {
         api.route_layer(axum::middleware::from_fn_with_state(
             rl,
