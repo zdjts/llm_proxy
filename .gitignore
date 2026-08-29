@@ -13,6 +13,10 @@ data/
 test-gateway.sh
 docs/*
 !docs/adr-017-runtime-boundaries.md
+!docs/adr-018-structure-only-refactor.md
+!docs/implementation-plan-structure-refactor.md
+!docs/slice-0-structure-inventory.md
+!docs/structure-refactor-report.md
 
 # Frontend
 frontend/node_modules/

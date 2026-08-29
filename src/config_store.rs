@@ -43,6 +43,7 @@ pub struct ModelRegistryEntry {
     pub enabled: bool,
 }
 
+/// Startup-static policy copied from YAML (ADR-017). Not hot-reloaded.
 #[derive(Debug, Clone)]
 pub struct RuntimePolicy {
     pub failover: FailoverConfig,
@@ -215,6 +216,59 @@ impl ConfigStore {
             sqlx::query("INSERT INTO routing_config (logical_model, pool_id, default_params, enabled) VALUES (?1, ?2, ?3, 1)")
                 .bind(model).bind(routing.pool_id()).bind(params.as_deref()).execute(&mut *tx).await
                 .map_err(|e| AppError::Internal(format!("ConfigStore import routing: {e}")))?;
+        }
+        for entry in &config.model_registry {
+            let caps = if entry.capabilities_json.is_null() {
+                None
+            } else {
+                Some(
+                    serde_json::to_string(&entry.capabilities_json).map_err(|e| {
+                        AppError::Config(format!(
+                            "model_registry entry '{}' capabilities_json serialize: {e}",
+                            entry.id
+                        ))
+                    })?,
+                )
+            };
+            sqlx::query(
+                "INSERT INTO model_registry (
+                    id, display_name, provider_kind, provider_config_id,
+                    supports_vision, supports_tool_calling, supports_json_mode,
+                    max_context_tokens, max_output_tokens,
+                    input_price_per_1m, output_price_per_1m,
+                    capabilities_json, enabled
+                ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+                ON CONFLICT(id) DO UPDATE SET
+                    display_name = excluded.display_name,
+                    provider_kind = excluded.provider_kind,
+                    provider_config_id = excluded.provider_config_id,
+                    supports_vision = excluded.supports_vision,
+                    supports_tool_calling = excluded.supports_tool_calling,
+                    supports_json_mode = excluded.supports_json_mode,
+                    max_context_tokens = excluded.max_context_tokens,
+                    max_output_tokens = excluded.max_output_tokens,
+                    input_price_per_1m = excluded.input_price_per_1m,
+                    output_price_per_1m = excluded.output_price_per_1m,
+                    capabilities_json = excluded.capabilities_json,
+                    enabled = excluded.enabled,
+                    updated_at = unixepoch('subsec') * 1000",
+            )
+            .bind(&entry.id)
+            .bind(&entry.display_name)
+            .bind(&entry.provider_kind)
+            .bind(entry.provider_config_id.as_deref())
+            .bind(entry.supports_vision as i32)
+            .bind(entry.supports_tool_calling as i32)
+            .bind(entry.supports_json_mode as i32)
+            .bind(entry.max_context_tokens)
+            .bind(entry.max_output_tokens)
+            .bind(entry.input_price_per_1m)
+            .bind(entry.output_price_per_1m)
+            .bind(caps.as_deref())
+            .bind(entry.enabled as i32)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AppError::Internal(format!("ConfigStore import model_registry: {e}")))?;
         }
         tx.commit()
             .await

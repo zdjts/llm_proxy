@@ -3,6 +3,10 @@
 //! Loads `config.yaml` into a strongly-typed [`Config`] struct. Validates on startup:
 //! every `model_to_pool` entry must reference an existing pool; provider `pool_id` references
 //! must resolve; key entries must be non-empty.
+//!
+//! YAML subsystem types live here (or are re-exported from here). After boot,
+//! ADR-017 still applies: this struct is the **startup YAML snapshot**, not the
+//! live [`crate::config_store::ConfigStore`] for pools/providers/routing.
 
 pub mod pricing;
 
@@ -11,7 +15,18 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+/// Feature-module YAML types, re-exported so `config` is the consistent home.
+pub use crate::auth::ClientKeyEntry;
+pub use crate::auth::acl::AclConfig;
+pub use crate::fallback::FallbackConfig;
+
 /// Root configuration loaded from `config.yaml`.
+///
+/// YAML-only after boot: `server`, `auth`, `admin`, `rate_limit`, `concurrency`,
+/// `acl`, `fallback_models`, `cache_max_entries`, `failover`/`alerts` (also copied
+/// into [`crate::config_store::RuntimePolicy`]).
+/// Bootstrapped then DB-owned: `pools`, `providers`, `model_to_pool`.
+/// Accounting vs display: `pricing` vs `model_metadata` (do not merge).
 #[derive(Debug, Deserialize)]
 pub struct Config {
     pub server: ServerConfig,
@@ -21,6 +36,10 @@ pub struct Config {
     pub pools: HashMap<String, PoolConfig>,
     pub providers: Vec<ProviderConfig>,
     pub model_to_pool: HashMap<String, ModelRouting>,
+    /// Optional managed model registry rows carried through explicit YAML
+    /// import/export. Empty on bootstrap configs that only define routing.
+    #[serde(default)]
+    pub model_registry: Vec<ModelRegistryConfig>,
     #[serde(default)]
     pub model_metadata: ModelMetadataConfig,
     #[serde(default)]
@@ -36,9 +55,9 @@ pub struct Config {
     #[serde(default)]
     pub alerts: AlertConfig,
     #[serde(default)]
-    pub acl: crate::auth::acl::AclConfig,
+    pub acl: AclConfig,
     #[serde(default)]
-    pub fallback_models: crate::fallback::FallbackConfig,
+    pub fallback_models: FallbackConfig,
     #[serde(default)]
     pub concurrency: ConcurrencyConfig,
 }
@@ -61,7 +80,7 @@ fn default_max_body_bytes() -> usize {
 #[derive(Debug, Deserialize)]
 pub struct AuthConfig {
     /// List of valid client API key entries for gateway access.
-    pub client_keys: Vec<crate::auth::ClientKeyEntry>,
+    pub client_keys: Vec<ClientKeyEntry>,
 }
 
 /// SQLite database path configuration.
@@ -181,6 +200,42 @@ pub struct ProviderConfig {
     /// Arbitrary provider-specific metadata (JSON).
     #[serde(default)]
     pub metadata: serde_json::Value,
+}
+
+/// Managed model-registry entry for explicit config import/export.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ModelRegistryConfig {
+    pub id: String,
+    pub display_name: String,
+    pub provider_kind: String,
+    #[serde(default)]
+    pub provider_config_id: Option<String>,
+    #[serde(default)]
+    pub supports_vision: bool,
+    #[serde(default)]
+    pub supports_tool_calling: bool,
+    #[serde(default)]
+    pub supports_json_mode: bool,
+    #[serde(default = "default_registry_tokens")]
+    pub max_context_tokens: i32,
+    #[serde(default = "default_registry_tokens")]
+    pub max_output_tokens: i32,
+    #[serde(default)]
+    pub input_price_per_1m: Option<f64>,
+    #[serde(default)]
+    pub output_price_per_1m: Option<f64>,
+    #[serde(default)]
+    pub capabilities_json: serde_json::Value,
+    #[serde(default = "default_registry_enabled")]
+    pub enabled: bool,
+}
+
+fn default_registry_tokens() -> i32 {
+    4096
+}
+
+fn default_registry_enabled() -> bool {
+    true
 }
 
 /// Model-to-pool routing entry. Accepts either a plain pool-id string or an
@@ -506,6 +561,69 @@ impl Config {
                         "Pool '{pool_id}' key {i} has empty key",
                     )));
                 }
+            }
+        }
+        let mut seen_registry = std::collections::HashSet::new();
+        for entry in &self.model_registry {
+            if entry.id.trim().is_empty() {
+                return Err(crate::error::AppError::Config(
+                    "model_registry entry id must be non-empty".into(),
+                ));
+            }
+            if entry.display_name.trim().is_empty() {
+                return Err(crate::error::AppError::Config(format!(
+                    "model_registry entry '{}' display_name must be non-empty",
+                    entry.id
+                )));
+            }
+            if entry.provider_kind.trim().is_empty() {
+                return Err(crate::error::AppError::Config(format!(
+                    "model_registry entry '{}' provider_kind must be non-empty",
+                    entry.id
+                )));
+            }
+            if entry.max_context_tokens <= 0 || entry.max_output_tokens <= 0 {
+                return Err(crate::error::AppError::Config(format!(
+                    "model_registry entry '{}' token limits must be positive",
+                    entry.id
+                )));
+            }
+            for price in [entry.input_price_per_1m, entry.output_price_per_1m]
+                .into_iter()
+                .flatten()
+            {
+                if !price.is_finite() || price < 0.0 {
+                    return Err(crate::error::AppError::Config(format!(
+                        "model_registry entry '{}' prices must be finite and non-negative",
+                        entry.id
+                    )));
+                }
+            }
+            if !entry.capabilities_json.is_null() && !entry.capabilities_json.is_object() {
+                return Err(crate::error::AppError::Config(format!(
+                    "model_registry entry '{}' capabilities_json must be an object",
+                    entry.id
+                )));
+            }
+            if let Some(provider_id) = entry.provider_config_id.as_deref() {
+                if provider_id.trim().is_empty() {
+                    return Err(crate::error::AppError::Config(format!(
+                        "model_registry entry '{}' provider_config_id cannot be empty",
+                        entry.id
+                    )));
+                }
+                if !self.providers.iter().any(|p| p.id == provider_id) {
+                    return Err(crate::error::AppError::Config(format!(
+                        "model_registry entry '{}' references unknown provider '{provider_id}'",
+                        entry.id
+                    )));
+                }
+            }
+            if !seen_registry.insert(entry.id.clone()) {
+                return Err(crate::error::AppError::Config(format!(
+                    "duplicate model_registry id '{}'",
+                    entry.id
+                )));
             }
         }
         Ok(())
