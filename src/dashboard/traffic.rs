@@ -12,6 +12,8 @@ use sqlx::SqlitePool;
 
 use crate::error::AppError;
 
+use super::queries::query_tenant_list;
+
 #[derive(Deserialize, Default)]
 pub struct TrendQuery {
     pub days: Option<i64>,
@@ -88,15 +90,6 @@ pub async fn traffic_trend_handler(
         selected_tenant: q.tenant,
     })
     .into_response())
-}
-
-async fn query_tenant_list(pool: &SqlitePool) -> Result<Vec<String>, AppError> {
-    let rows: Vec<(String,)> =
-        sqlx::query_as("SELECT DISTINCT tenant_id FROM request_log ORDER BY tenant_id")
-            .fetch_all(pool)
-            .await
-            .map_err(|e| AppError::Internal(format!("tenant list query: {e}")))?;
-    Ok(rows.into_iter().map(|(t,)| t).collect())
 }
 
 async fn query_traffic(

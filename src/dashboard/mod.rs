@@ -12,6 +12,7 @@ pub mod export;
 pub mod help;
 pub mod keys;
 pub mod live;
+pub mod queries;
 pub mod replay;
 pub mod requests;
 pub mod stub_api;
