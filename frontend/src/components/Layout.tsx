@@ -23,11 +23,11 @@ export function Layout() {
     wasMobileNavOpen.current = mobileNavOpen;
   }, [mobileNavOpen]);
 
-  return <div className="min-h-screen bg-[#f6f7f9] text-surface-800">
+  return <div className="min-h-screen bg-[#f7f6f2] text-surface-800">
     <Sidebar mobileOpen={mobileNavOpen} onMobileClose={closeMobileNav} />
-    <div className="min-h-screen lg:pl-[248px]">
+    <div className="min-h-screen lg:pl-64">
       <TopBar menuButtonRef={menuButtonRef} onMenuClick={openMobileNav} />
-      <main className="min-w-0 px-4 py-5 sm:px-6 lg:px-9 lg:py-8"><div className="mx-auto max-w-[1440px]"><Outlet /></div></main>
+      <main className="min-w-0 px-4 py-6 sm:px-6 lg:px-10 lg:py-8"><div className="mx-auto max-w-[1480px]"><Outlet /></div></main>
     </div>
   </div>;
 }

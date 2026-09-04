@@ -170,6 +170,28 @@ struct ExportDocument {
     providers: Vec<serde_json::Value>,
     pools: std::collections::BTreeMap<String, ExportPool>,
     model_to_pool: std::collections::BTreeMap<String, serde_json::Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    model_registry: Vec<serde_json::Value>,
+}
+
+fn pool_strategy_to_yaml(strategy: &crate::config::PoolStrategy) -> &'static str {
+    match strategy {
+        crate::config::PoolStrategy::WeightedRandom => "weighted_random",
+    }
+}
+
+fn provider_kind_to_yaml(kind: &crate::config::ProviderKind) -> &'static str {
+    match kind {
+        crate::config::ProviderKind::OpenAi => "open_ai",
+        crate::config::ProviderKind::Anthropic => "anthropic",
+        crate::config::ProviderKind::Gemini => "gemini",
+        crate::config::ProviderKind::Azure => "azure",
+        crate::config::ProviderKind::Bedrock => "bedrock",
+        crate::config::ProviderKind::Cohere => "cohere",
+        crate::config::ProviderKind::Mistral => "mistral",
+        crate::config::ProviderKind::Ollama => "ollama",
+        crate::config::ProviderKind::Vllm => "vllm",
+    }
 }
 
 pub async fn admin_api_config_export(
@@ -183,7 +205,7 @@ pub async fn admin_api_config_export(
             (
                 id.clone(),
                 ExportPool {
-                    strategy: format!("{:?}", pool.strategy).to_lowercase(),
+                    strategy: pool_strategy_to_yaml(&pool.strategy).into(),
                     keys: pool
                         .keys
                         .iter()
@@ -202,18 +224,13 @@ pub async fn admin_api_config_export(
         .map(|provider| {
             serde_json::json!({
                 "id": provider.id,
-                "kind": format!("{:?}", provider.kind).to_lowercase(),
+                "kind": provider_kind_to_yaml(&provider.kind),
                 "base_url": provider.base_url,
                 "pool_id": provider.pool_id,
                 "api_version": provider.api_version,
                 "region": provider.region,
-                "metadata": provider.metadata.as_object().map(|metadata| {
-                    metadata.iter().filter_map(|(key, value)| {
-                        let lower = key.to_ascii_lowercase();
-                        let sensitive = lower.contains("key") || lower.contains("token") || lower.contains("secret") || lower.contains("password") || lower.contains("credential") || lower.contains("authorization");
-                        (!sensitive && value.is_string()).then(|| (key.clone(), value.clone()))
-                    }).collect::<std::collections::BTreeMap<_, _>>()
-                }).unwrap_or_default(),            })
+                "metadata": provider.metadata,
+            })
         })
         .collect();
     let model_to_pool = snapshot
@@ -233,6 +250,32 @@ pub async fn admin_api_config_export(
                 }),
             };
             (model.clone(), value)
+        })
+        .collect();
+    let model_registry = snapshot
+        .model_registry
+        .iter()
+        .map(|entry| {
+            let capabilities = entry
+                .capabilities_json
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+                .unwrap_or_else(|| serde_json::json!({}));
+            serde_json::json!({
+                "id": entry.id,
+                "display_name": entry.display_name,
+                "provider_kind": entry.provider_kind,
+                "provider_config_id": entry.provider_config_id,
+                "supports_vision": entry.supports_vision,
+                "supports_tool_calling": entry.supports_tool_calling,
+                "supports_json_mode": entry.supports_json_mode,
+                "max_context_tokens": entry.max_context_tokens,
+                "max_output_tokens": entry.max_output_tokens,
+                "input_price_per_1m": entry.input_price_per_1m,
+                "output_price_per_1m": entry.output_price_per_1m,
+                "capabilities_json": capabilities,
+                "enabled": entry.enabled,
+            })
         })
         .collect();
     let runtime = &snapshot.runtime.failover;
@@ -258,6 +301,7 @@ pub async fn admin_api_config_export(
         providers,
         pools,
         model_to_pool,
+        model_registry,
     })
     .map_err(|e| AppError::Internal(format!("export config: {e}")))?;
     Ok((
@@ -502,22 +546,71 @@ fn model_value(r: &ModelRegistryRecord) -> Value {
 }
 async fn validate_provider(pool: &sqlx::SqlitePool, id: Option<&str>) -> Result<(), AppError> {
     if let Some(id) = id {
-        if id.trim().is_empty() {
-            return Err(AppError::BadRequest(
-                "provider_config_id cannot be empty".into(),
-            ));
-        }
-        let found: Option<i64> = sqlx::query_scalar("SELECT 1 FROM provider_config WHERE id=?1")
-            .bind(id)
+        provider_pool_id(pool, id).await?;
+    }
+    Ok(())
+}
+
+/// Resolve an enabled provider's pool so a registry row can become callable.
+async fn provider_pool_id(pool: &sqlx::SqlitePool, provider_id: &str) -> Result<String, AppError> {
+    if provider_id.trim().is_empty() {
+        return Err(AppError::BadRequest(
+            "provider_config_id cannot be empty".into(),
+        ));
+    }
+    let pool_id: Option<String> =
+        sqlx::query_scalar("SELECT pool_id FROM provider_config WHERE id=?1 AND enabled = 1")
+            .bind(provider_id)
             .fetch_optional(pool)
             .await
             .map_err(|e| AppError::Internal(format!("validate provider: {e}")))?;
-        if found.is_none() {
-            return Err(AppError::BadRequest(
-                "provider_config_id does not exist".into(),
-            ));
-        }
+    pool_id.ok_or_else(|| {
+        AppError::BadRequest(format!(
+            "provider_config_id '{provider_id}' does not exist or is disabled"
+        ))
+    })
+}
+
+/// Ensure a logical model is routed through the provider's pool so it appears
+/// in `/v1/models` and is callable by CLI clients.
+async fn ensure_model_routing(
+    pool: &sqlx::SqlitePool,
+    logical_model: &str,
+    provider_config_id: Option<&str>,
+    enabled: bool,
+) -> Result<(), AppError> {
+    let Some(provider_id) = provider_config_id.filter(|id| !id.trim().is_empty()) else {
+        return Ok(());
+    };
+    if !enabled {
+        return Ok(());
     }
+    let pool_id = provider_pool_id(pool, provider_id).await?;
+    let pool_exists: Option<i64> =
+        sqlx::query_scalar("SELECT 1 FROM key_pool WHERE id = ?1 AND enabled = 1")
+            .bind(&pool_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| AppError::Internal(format!("validate routing pool: {e}")))?;
+    if pool_exists.is_none() {
+        return Err(AppError::BadRequest(format!(
+            "provider '{provider_id}' references missing or disabled pool '{pool_id}'"
+        )));
+    }
+    sqlx::query("DELETE FROM routing_config WHERE logical_model = ?1")
+        .bind(logical_model)
+        .execute(pool)
+        .await
+        .map_err(|e| AppError::Internal(format!("ensure model routing: {e}")))?;
+    sqlx::query(
+        "INSERT INTO routing_config (logical_model, pool_id, default_params, enabled)
+         VALUES (?1, ?2, NULL, 1)",
+    )
+    .bind(logical_model)
+    .bind(pool_id)
+    .execute(pool)
+    .await
+    .map_err(|e| AppError::Internal(format!("ensure model routing: {e}")))?;
     Ok(())
 }
 
@@ -553,6 +646,20 @@ pub async fn admin_api_create_model(
             return Err(AppError::BadRequest("model id already exists".into()));
         }
         return Err(AppError::Internal(format!("create model: {e}")));
+    }
+    if let Err(error) = ensure_model_routing(
+        &state.db,
+        &req.id,
+        req.provider_config_id.as_deref(),
+        req.enabled,
+    )
+    .await
+    {
+        let _ = sqlx::query("DELETE FROM model_registry WHERE id = ?1")
+            .bind(&req.id)
+            .execute(&state.db)
+            .await;
+        return Err(error);
     }
     let after = get_model(&state.db, &req.id).await?;
     audit_trail::record_audit(
@@ -612,7 +719,9 @@ pub async fn admin_api_update_model(
         caps: caps_value,
     })?;
     validate_provider(&state.db, provider).await?;
-    sqlx::query("UPDATE model_registry SET display_name=?1,provider_kind=?2,provider_config_id=?3,supports_vision=?4,supports_tool_calling=?5,supports_json_mode=?6,max_context_tokens=?7,max_output_tokens=?8,input_price_per_1m=?9,output_price_per_1m=?10,capabilities_json=?11,enabled=?12,updated_at=unixepoch('subsec')*1000 WHERE id=?13").bind(display).bind(kind).bind(provider).bind(req.supports_vision.unwrap_or(before.supports_vision != 0) as i32).bind(req.supports_tool_calling.unwrap_or(before.supports_tool_calling != 0) as i32).bind(req.supports_json_mode.unwrap_or(before.supports_json_mode != 0) as i32).bind(context).bind(output).bind(input).bind(out_price).bind(caps).bind(req.enabled.unwrap_or(before.enabled != 0) as i32).bind(&id).execute(&state.db).await.map_err(|e|AppError::Internal(format!("update model: {e}")))?;
+    let enabled = req.enabled.unwrap_or(before.enabled != 0);
+    sqlx::query("UPDATE model_registry SET display_name=?1,provider_kind=?2,provider_config_id=?3,supports_vision=?4,supports_tool_calling=?5,supports_json_mode=?6,max_context_tokens=?7,max_output_tokens=?8,input_price_per_1m=?9,output_price_per_1m=?10,capabilities_json=?11,enabled=?12,updated_at=unixepoch('subsec')*1000 WHERE id=?13").bind(display).bind(kind).bind(provider).bind(req.supports_vision.unwrap_or(before.supports_vision != 0) as i32).bind(req.supports_tool_calling.unwrap_or(before.supports_tool_calling != 0) as i32).bind(req.supports_json_mode.unwrap_or(before.supports_json_mode != 0) as i32).bind(context).bind(output).bind(input).bind(out_price).bind(caps).bind(enabled as i32).bind(&id).execute(&state.db).await.map_err(|e|AppError::Internal(format!("update model: {e}")))?;
+    ensure_model_routing(&state.db, &id, provider, enabled).await?;
     let after = get_model(&state.db, &id).await?;
     audit_trail::record_audit(
         &state.db,

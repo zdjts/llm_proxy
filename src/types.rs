@@ -85,6 +85,12 @@ pub struct ResponseMessage {
     pub role: String,
     pub content: Option<String>,
     pub tool_calls: Option<Vec<ToolCall>>,
+    /// Provider-specific hidden reasoning text, when exposed by the upstream.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
+    /// Provider-specific structured thinking payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<serde_json::Value>,
 }
 
 /// A tool call requested by the model in a non-streaming response.
@@ -128,6 +134,12 @@ pub struct Delta {
     pub role: Option<String>,
     pub content: Option<String>,
     pub tool_calls: Option<Vec<DeltaToolCall>>,
+    /// Provider-specific incremental reasoning text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
+    /// Provider-specific incremental thinking payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<serde_json::Value>,
 }
 
 /// An incremental tool call within a streaming delta.

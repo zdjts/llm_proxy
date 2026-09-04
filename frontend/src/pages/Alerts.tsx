@@ -29,15 +29,15 @@ export function AlertsPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4 border-b border-surface-200 pb-5">
         <div>
-          <h1 className="text-xl font-semibold text-surface-900 sm:text-2xl">{t.alerts.title}</h1>
-          <p className="text-sm text-surface-500 mt-1">{t.alerts.subtitle.replace('{count}', String(data?.event_count ?? 0))}</p>
+          <h1 className="font-serif text-[26px] font-bold tracking-[0.005em] text-surface-900 sm:text-[32px]">{t.alerts.title}</h1>
+          <p className="mt-1 text-[14.5px] text-surface-600">{t.alerts.subtitle.replace('{count}', String(data?.event_count ?? 0))}</p>
         </div>
         <button onClick={handleCsvExport} className="btn-gold flex items-center gap-1.5 text-xs" disabled={!data?.events?.length}>
           <Download size={13} /> {t.alerts.csv}
         </button>
       </div>
 
-      <div className="glass-card rounded-lg flex flex-wrap gap-3 p-4" role="search">
+      <div className="glass-card flex flex-wrap items-center gap-3 p-4" role="search">
         <select value={type} onChange={e => setType(e.target.value)} className="input-glass">
           <option value="">{t.alerts.allTypes}</option>
           {['UpstreamError', 'LatencySpike', 'RateLimited', 'PoolExhausted'].map(tp => <option key={tp} value={tp}>{tp}</option>)}
@@ -45,33 +45,33 @@ export function AlertsPage() {
         <input placeholder={t.common.placeholder_tenant} value={tenant} onChange={e => setTenant(e.target.value)} className="input-glass w-40" />
       </div>
 
-      {isLoading ? <Skeleton className="h-32 w-full" /> : isError ? <ErrorState action={<button type="button" className="btn-secondary text-xs" onClick={() => refetch()}>{t.common.uiRetry}</button>} /> : <div className="glass-card rounded-lg overflow-hidden">
+      {isLoading ? <Skeleton className="h-32 w-full" /> : isError ? <ErrorState action={<button type="button" className="btn-secondary text-xs" onClick={() => refetch()}>{t.common.uiRetry}</button>} /> : <div className="glass-card overflow-hidden p-1">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-surface-50">
-              <tr className="border-b border-surface-200">
-                <th className="text-left p-3 text-xs text-surface-400 uppercase font-semibold">{t.alerts.thId}</th>
-                <th className="text-left p-3 text-xs text-surface-400 uppercase font-semibold">{t.alerts.thTime}</th>
-                <th className="text-left p-3 text-xs text-surface-400 uppercase font-semibold">{t.alerts.thType}</th>
-                <th className="text-left p-3 text-xs text-surface-400 uppercase font-semibold">{t.alerts.thPool}</th>
-                <th className="text-left p-3 text-xs text-surface-400 uppercase font-semibold">{t.alerts.thTenant}</th>
-                <th className="text-left p-3 text-xs text-surface-400 uppercase font-semibold">{t.alerts.thModel}</th>
-                <th className="text-left p-3 text-xs text-surface-400 uppercase font-semibold">{t.alerts.thErrorCode}</th>
-                <th className="text-left p-3 text-xs text-surface-400 uppercase font-semibold">{t.alerts.thMessage}</th>
+            <thead>
+              <tr>
+                <th className="text-left border-b border-surface-200 p-3 font-operational text-[10px] font-semibold uppercase tracking-[0.1em] text-surface-400">{t.alerts.thId}</th>
+                <th className="text-left border-b border-surface-200 p-3 font-operational text-[10px] font-semibold uppercase tracking-[0.1em] text-surface-400">{t.alerts.thTime}</th>
+                <th className="text-left border-b border-surface-200 p-3 font-operational text-[10px] font-semibold uppercase tracking-[0.1em] text-surface-400">{t.alerts.thType}</th>
+                <th className="text-left border-b border-surface-200 p-3 font-operational text-[10px] font-semibold uppercase tracking-[0.1em] text-surface-400">{t.alerts.thPool}</th>
+                <th className="text-left border-b border-surface-200 p-3 font-operational text-[10px] font-semibold uppercase tracking-[0.1em] text-surface-400">{t.alerts.thTenant}</th>
+                <th className="text-left border-b border-surface-200 p-3 font-operational text-[10px] font-semibold uppercase tracking-[0.1em] text-surface-400">{t.alerts.thModel}</th>
+                <th className="text-left border-b border-surface-200 p-3 font-operational text-[10px] font-semibold uppercase tracking-[0.1em] text-surface-400">{t.alerts.thErrorCode}</th>
+                <th className="text-left border-b border-surface-200 p-3 font-operational text-[10px] font-semibold uppercase tracking-[0.1em] text-surface-400">{t.alerts.thMessage}</th>
               </tr>
             </thead>
             <tbody>
               {data?.events.map(evt => {
                 const Icon = typeIcons[evt.event_type] || AlertTriangle;
                 return (
-                  <tr key={evt.id} className="border-b border-surface-50 hover:bg-surface-50/50 transition-colors">
+                  <tr key={evt.id} className="border-b border-surface-100 last:border-0 hover:bg-surface-50 transition-colors">
                     <td className="p-3 text-surface-400 text-xs font-mono">{evt.id}</td>
                     <td className="p-3 text-surface-500 text-xs whitespace-nowrap">{new Date(evt.ts * 1000).toLocaleString()}</td>
                     <td className="p-3"><span className={`badge ${typeColors[evt.event_type] || 'badge-info'} flex items-center gap-1 w-fit`}><Icon size={12} /> {evt.event_type}</span></td>
                     <td className="p-3 text-surface-500">{evt.pool_id || '—'}</td>
                     <td className="p-3 text-surface-500">{evt.tenant_id || '—'}</td>
                     <td className="p-3 text-surface-500">{evt.model || '—'}</td>
-                    <td className="p-3 text-red-600">{evt.error_code || '—'}</td>
+                    <td className="p-3 text-danger-dark">{evt.error_code || '—'}</td>
                     <td className="p-3 text-surface-600 max-w-[300px] truncate">{evt.msg}</td>
                   </tr>
                 );

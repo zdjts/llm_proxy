@@ -23,8 +23,14 @@ HTTP gateway. It does not change the external API or the pricing schema.
   configuration. The `AccountingPricing` boundary makes this source explicit.
   Metadata pricing is not converted, merged, or allowed to override accounting
   pricing; the two structures have different compatibility and unit semantics.
-- The DB `model_registry` is currently a cache for registry/admin data. It is
-  not a source of callable models, metadata routes, or accounting prices.
+- The DB `model_registry` stores display/capability metadata for admin and
+  catalog enrichment. Explicit admin config export/import may carry these rows
+  so deployments round-trip completely, but the registry is still not a source
+  of callable models, metadata routes, or accounting prices. A model becomes
+  callable only after it has a live `routing_config` entry (and therefore a
+  Router snapshot entry). Creating or updating a registry row with an enabled
+  `provider_config_id` may auto-create that routing row from the provider's
+  pool.
 
 - Client authentication is a bootstrap + ephemeral hybrid. YAML client keys
   seed the shared `AuthStore` at startup; admin CRUD changes only its process

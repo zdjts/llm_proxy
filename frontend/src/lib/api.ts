@@ -26,7 +26,8 @@ api.interceptors.request.use((config) => {
 
 api.interceptors.response.use((res) => res, async (error) => {
   const original = error.config;
-  if (error.response?.status === 401 && original && !original._retry) {
+  const isAuthRequest = original?.url === '/api/auth/login' || original?.url === '/api/auth/refresh';
+  if (error.response?.status === 401 && original && !original._retry && !isAuthRequest) {
     if (isRefreshing) {
       return new Promise((resolve, reject) => failedQueue.push({
         resolve: (token) => { original.headers.Authorization = `Bearer ${token}`; resolve(api(original)); }, reject,
@@ -73,7 +74,7 @@ export function apiError(error: unknown): string {
     const status = error.response?.status;
     const detail = error.response?.data?.error ?? error.response?.data?.message ?? error.response?.data;
     const message = errorMessage(detail);
-    if (status === 401) return 'Authentication required.';
+    if (status === 401) return message || 'Authentication required.';
     if (status === 403) return 'You do not have permission for this operation.';
     if (status === 404) return 'The requested admin resource was not found.';
     if (status === 409) return 'The operation conflicts with current configuration.';

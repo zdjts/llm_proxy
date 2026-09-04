@@ -88,11 +88,16 @@ impl RelayState {
                     None => continue,
                 };
 
+                let mut reasoning = false;
                 let mut text = String::new();
                 for part in parts {
                     if let Some(t) = part.get("text").and_then(|v| v.as_str()) {
                         text.push_str(t);
                     }
+                    reasoning |= part
+                        .get("thought")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
                 }
 
                 let finish_reason = candidate
@@ -113,16 +118,18 @@ impl RelayState {
 
                 let is_first = self.pending.is_empty();
 
-                if is_first && let Some(chunk) = self.emit_chunk("assistant", None) {
+                if is_first && let Some(chunk) = self.emit_chunk("assistant", None, false) {
                     self.pending.push(chunk);
                 }
 
                 if !text.is_empty() {
-                    if let Some(chunk) = self.emit_chunk(&text, self.finish_reason.as_deref()) {
+                    if let Some(chunk) =
+                        self.emit_chunk(&text, self.finish_reason.as_deref(), reasoning)
+                    {
                         self.pending.push(chunk);
                     }
                 } else if self.finish_reason.is_some()
-                    && let Some(chunk) = self.emit_chunk("", self.finish_reason.as_deref())
+                    && let Some(chunk) = self.emit_chunk("", self.finish_reason.as_deref(), false)
                 {
                     self.pending.push(chunk);
                 }
@@ -153,9 +160,16 @@ impl RelayState {
         }
     }
 
-    fn emit_chunk(&self, text: &str, finish_reason: Option<&str>) -> Option<Bytes> {
+    fn emit_chunk(
+        &self,
+        text: &str,
+        finish_reason: Option<&str>,
+        reasoning: bool,
+    ) -> Option<Bytes> {
         let delta = if text == "assistant" {
             serde_json::json!({"role": "assistant"})
+        } else if reasoning {
+            serde_json::json!({"reasoning_content": text})
         } else if text.is_empty() {
             serde_json::json!({})
         } else {

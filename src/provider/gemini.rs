@@ -259,6 +259,8 @@ struct GeminiGenerationConfig {
     top_p: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stopSequences: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinkingConfig: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -277,7 +279,15 @@ struct GeminiCandidate {
 
 #[derive(Deserialize)]
 struct GeminiContentResponse {
-    parts: Vec<GeminiPart>,
+    parts: Vec<GeminiResponsePart>,
+}
+
+#[derive(Deserialize)]
+struct GeminiResponsePart {
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    thought: bool,
 }
 
 // ── Conversion ────────────────────────────────────────────────────────────
@@ -339,6 +349,13 @@ fn openai_to_gemini(req: &ChatCompletionRequest) -> GeminiRequest {
         _ => None,
     };
 
+    let thinking_config = req
+        .extra
+        .get("thinkingConfig")
+        .cloned()
+        .or_else(|| req.extra.get("thinking_config").cloned())
+        .or_else(|| req.extra.get("thinking").cloned());
+
     GeminiRequest {
         contents,
         systemInstruction: system_instruction,
@@ -347,22 +364,32 @@ fn openai_to_gemini(req: &ChatCompletionRequest) -> GeminiRequest {
             temperature: req.temperature,
             top_p: req.top_p,
             stopSequences: stop,
+            thinkingConfig: thinking_config,
         }),
     }
 }
 
 fn gemini_to_openai(gm: &GeminiResponse, model: &str) -> ChatCompletionResponse {
     let candidate = gm.candidates.first();
-    let content_text = candidate
-        .map(|c| {
-            c.content
-                .parts
-                .iter()
-                .map(|p| p.text.as_str())
-                .collect::<Vec<_>>()
-                .join("")
-        })
-        .unwrap_or_default();
+    let mut reasoning_parts = Vec::new();
+    let mut answer_parts = Vec::new();
+    if let Some(candidate) = candidate {
+        for part in &candidate.content.parts {
+            if let Some(text) = part.text.as_deref() {
+                if part.thought {
+                    reasoning_parts.push(text);
+                } else {
+                    answer_parts.push(text);
+                }
+            }
+        }
+    }
+    let content_text = answer_parts.join("");
+    let reasoning_content = if reasoning_parts.is_empty() {
+        None
+    } else {
+        Some(reasoning_parts.join(""))
+    };
 
     let finish_reason = candidate
         .and_then(|c| c.finishReason.as_deref())
@@ -404,6 +431,8 @@ fn gemini_to_openai(gm: &GeminiResponse, model: &str) -> ChatCompletionResponse 
                 role: "assistant".into(),
                 content: Some(content_text),
                 tool_calls: None,
+                reasoning_content,
+                thinking: None,
             },
             finish_reason,
         }],

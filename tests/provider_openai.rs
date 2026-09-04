@@ -47,6 +47,83 @@ fn test_request() -> ChatCompletionRequest {
 }
 
 #[tokio::test]
+async fn it_forwards_reasoning_parameters_and_preserves_response_fields() {
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("POST", "/chat/completions")
+        .match_body(mockito::Matcher::Json(serde_json::json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": false,
+            "reasoning_effort": "high",
+            "thinking": {"type": "enabled", "budget_tokens": 4096}
+        })))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"id":"chat-2","object":"chat.completion","created":123,"model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"answer","reasoning_content":"internal trace","thinking":{"summary":"done"}},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}"#)
+        .create_async()
+        .await;
+
+    let provider = test_provider(&server);
+    let mut request = test_request();
+    request.extra = serde_json::json!({
+        "reasoning_effort": "high",
+        "thinking": {"type": "enabled", "budget_tokens": 4096}
+    });
+    let result = provider.chat(request, &test_key()).await.unwrap();
+
+    match result {
+        ProviderResponse::Once(response) => {
+            let message = &response.choices[0].message;
+            assert_eq!(message.reasoning_content.as_deref(), Some("internal trace"));
+            assert_eq!(
+                message.thinking.as_ref(),
+                Some(&serde_json::json!({"summary": "done"}))
+            );
+        }
+        ProviderResponse::Stream { .. } => panic!("expected Once, got Stream"),
+    }
+}
+#[tokio::test]
+async fn it_preserves_thinking_fields_from_gemini() {
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("POST", "/models/gemini:generateContent")
+        .match_body(mockito::Matcher::Json(serde_json::json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+            "generationConfig": {
+                "maxOutputTokens": 8192,
+                "thinkingConfig": {"thinkingBudget": 1024}
+            }
+        })))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"candidates":[{"content":{"parts":[{"text":"trace","thought":true},{"text":"answer"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":2,"totalTokenCount":3}}"#)
+        .create_async()
+        .await;
+
+    let codes: Arc<[u16]> = Arc::from([401, 402, 403, 429]);
+    let provider =
+        llm_proxy::provider::gemini::GeminiProvider::new("gemini".into(), server.url(), codes);
+    let mut request = test_request();
+    request.model = "gemini".into();
+    request.extra = serde_json::json!({"thinkingConfig": {"thinkingBudget": 1024}});
+    let result = provider.chat(request, &test_key()).await.unwrap();
+    match result {
+        ProviderResponse::Once(response) => {
+            assert_eq!(
+                response.choices[0].message.content.as_deref(),
+                Some("answer")
+            );
+            assert_eq!(
+                response.choices[0].message.reasoning_content.as_deref(),
+                Some("trace")
+            );
+        }
+        ProviderResponse::Stream { .. } => panic!("expected Once, got Stream"),
+    }
+}
+#[tokio::test]
 async fn it_returns_once_on_2xx_non_stream() {
     let mut server = mockito::Server::new_async().await;
     server

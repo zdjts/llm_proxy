@@ -27,3 +27,6 @@ frontend/dist/
 prompts/
 .orc/
 sui-xiang-mirror/
+
+# Root tooling
+node_modules/

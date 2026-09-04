@@ -72,6 +72,8 @@ mod tests {
                     role: "assistant".into(),
                     content: Some("Hello".into()),
                     tool_calls: None,
+                    reasoning_content: None,
+                    thinking: None,
                 },
                 finish_reason: Some("stop".into()),
             }],

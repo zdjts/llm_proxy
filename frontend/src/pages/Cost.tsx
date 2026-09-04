@@ -33,8 +33,8 @@ export function CostPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4 border-b border-surface-200 pb-5">
         <div>
-          <h1 className="text-xl font-semibold text-surface-900 sm:text-2xl">{t.cost.title}</h1>
-          <p className="text-sm text-surface-500 mt-1">{t.cost.subtitle}</p>
+          <h1 className="font-serif text-[26px] font-bold tracking-[0.005em] text-surface-900 sm:text-[32px]">{t.cost.title}</h1>
+          <p className="mt-1 text-[14.5px] text-surface-600">{t.cost.subtitle}</p>
         </div>
         <div className="flex gap-2">
           <select value={hours} onChange={e => setHours(Number(e.target.value))} className="input-glass">
@@ -51,7 +51,7 @@ export function CostPage() {
       </div>
 
       {!isLoading && !isError && data?.stats && (
-        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-surface-200 bg-surface-200 md:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {[
             { label: t.cost.requests24h, value: data.stats.total_requests, key: 'req' },
             { label: t.cost.estCost, value: data.stats.total_cost, key: 'cost' },
@@ -62,32 +62,32 @@ export function CostPage() {
             { label: t.cost.completionTokens, value: data.stats.completion_tokens.toLocaleString(), key: 'completion' },
             { label: t.cost.cachedTokens, value: data.stats.cached_tokens.toLocaleString(), key: 'cached' },
           ].map((s, i) => (
-            <motion.div key={s.key} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.06 }} className="rounded-none border-0 bg-white p-4 shadow-none">
-              <div className="text-[11px] text-surface-400 uppercase tracking-wider">{s.label}</div>
-              <div className="text-2xl font-bold text-surface-800 mt-1">{s.value}</div>
+            <motion.div key={s.key} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }} className="rounded-2xl border border-surface-200 bg-white p-4 shadow-[0_8px_28px_-18px_rgba(10,10,10,0.18)] transition-shadow duration-300 hover:shadow-[0_14px_34px_-20px_rgba(10,10,10,0.24)]">
+              <div className="text-xs font-medium text-surface-500">{s.label}</div>
+              <div className="mt-1 font-operational text-2xl font-bold tracking-tight text-surface-900">{s.value}</div>
             </motion.div>
           ))}
         </div>
       )}
 
-      {isLoading ? <Skeleton className="h-32 w-full" /> : isError ? <ErrorState action={<button type="button" className="btn-secondary text-xs" onClick={() => refetch()}>{t.common.uiRetry}</button>} /> : <div className="glass-card rounded-lg overflow-hidden">
+      {isLoading ? <Skeleton className="h-32 w-full" /> : isError ? <ErrorState action={<button type="button" className="btn-secondary text-xs" onClick={() => refetch()}>{t.common.uiRetry}</button>} /> : <div className="glass-card overflow-hidden p-1">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-surface-50">
-              <tr className="border-b border-surface-200">
-                <th className="text-left p-3 text-xs text-surface-400 uppercase font-semibold">{t.cost.thModel}</th>
-                <th className="text-left p-3 text-xs text-surface-400 uppercase font-semibold">{t.cost.thPool}</th>
-                <th className="text-right p-3 text-xs text-surface-400 uppercase font-semibold">{t.cost.thPrompt}</th>
-                <th className="text-right p-3 text-xs text-surface-400 uppercase font-semibold">{t.cost.thCompletion}</th>
-                <th className="text-right p-3 text-xs text-surface-400 uppercase font-semibold">{t.cost.thCacheHits}</th>
-                <th className="text-right p-3 text-xs text-surface-400 uppercase font-semibold">{t.cost.thRequests}</th>
-                <th className="text-right p-3 text-xs text-surface-400 uppercase font-semibold">{t.cost.thErrors}</th>
-                <th className="text-right p-3 text-xs text-surface-400 uppercase font-semibold">{t.cost.thCost}</th>
+            <thead>
+              <tr>
+                <th className="text-left border-b border-surface-200 p-3 font-operational text-[10px] font-semibold uppercase tracking-[0.1em] text-surface-400">{t.cost.thModel}</th>
+                <th className="text-left border-b border-surface-200 p-3 font-operational text-[10px] font-semibold uppercase tracking-[0.1em] text-surface-400">{t.cost.thPool}</th>
+                <th className="text-right border-b border-surface-200 p-3 font-operational text-[10px] font-semibold uppercase tracking-[0.1em] text-surface-400">{t.cost.thPrompt}</th>
+                <th className="text-right border-b border-surface-200 p-3 font-operational text-[10px] font-semibold uppercase tracking-[0.1em] text-surface-400">{t.cost.thCompletion}</th>
+                <th className="text-right border-b border-surface-200 p-3 font-operational text-[10px] font-semibold uppercase tracking-[0.1em] text-surface-400">{t.cost.thCacheHits}</th>
+                <th className="text-right border-b border-surface-200 p-3 font-operational text-[10px] font-semibold uppercase tracking-[0.1em] text-surface-400">{t.cost.thRequests}</th>
+                <th className="text-right border-b border-surface-200 p-3 font-operational text-[10px] font-semibold uppercase tracking-[0.1em] text-surface-400">{t.cost.thErrors}</th>
+                <th className="text-right border-b border-surface-200 p-3 font-operational text-[10px] font-semibold uppercase tracking-[0.1em] text-surface-400">{t.cost.thCost}</th>
               </tr>
             </thead>
             <tbody>
               {data?.rows.map((r, i) => (
-                <tr key={`${r.model}-${r.pool_id}-${i}`} className="border-b border-surface-50 hover:bg-surface-50/50 transition-colors">
+                <tr key={`${r.model}-${r.pool_id}-${i}`} className="border-b border-surface-100 last:border-0 hover:bg-surface-50 transition-colors">
                   <td className="p-3 text-surface-700 font-medium">{r.model}</td>
                   <td className="p-3 text-surface-500">{r.pool_id}</td>
                   <td className="p-3 text-right text-surface-600 tabular-nums">{r.prompt_tokens.toLocaleString()}</td>
@@ -95,7 +95,7 @@ export function CostPage() {
                   <td className="p-3 text-right text-surface-500">{r.cached_tokens.toLocaleString()}</td>
                   <td className="p-3 text-right text-surface-600">{r.requests.toLocaleString()}</td>
                   <td className="p-3 text-right">{r.errors > 0 ? <span className="text-red-600 font-medium">{r.errors}</span> : <span className="text-surface-400">0</span>}</td>
-                  <td className="p-3 text-right text-accent-600 font-semibold tabular-nums">{r.cost_usd}</td>
+                  <td className="p-3 text-right font-semibold text-surface-900 tabular-nums">{r.cost_usd}</td>
                 </tr>
               ))}
               {(!data?.rows || data.rows.length === 0) && (

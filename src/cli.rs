@@ -40,8 +40,16 @@ mod cli_impl {
         Export {
             #[arg(short, long, default_value = "jsonl")]
             format: String,
-            #[arg(short, long, default_value = "24")]
+            #[arg(short = 'H', long, default_value = "24")]
             hours: u32,
+        },
+        ImportModels {
+            #[arg(long, default_value = "models-store.json")]
+            source: String,
+            #[arg(long)]
+            db: String,
+            #[arg(long, default_value_t = false)]
+            overwrite: bool,
         },
     }
 
@@ -144,9 +152,31 @@ mod cli_impl {
         monthly_requests_limit: Option<u64>,
     }
 
+    fn redact_url(url: &str) -> String {
+        let Ok(mut parsed) = reqwest::Url::parse(url) else {
+            return "[invalid URL]".to_owned();
+        };
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return "[invalid URL]".to_owned();
+        }
+        let _ = parsed.set_username("");
+        let _ = parsed.set_password(None);
+        parsed.set_query(None);
+        parsed.set_fragment(None);
+        parsed.to_string()
+    }
+
+    fn request_error(url: &str, error: reqwest::Error) -> String {
+        let target = redact_url(url);
+        format!(
+            "request to {target} failed: {}. Ensure the gateway is running at that address or specify --base-url <gateway-url>.",
+            error.without_url()
+        )
+    }
+
     fn do_get(url: &str) -> Result<String, String> {
         let client = reqwest::blocking::Client::new();
-        let resp = client.get(url).send().map_err(|e| e.to_string())?;
+        let resp = client.get(url).send().map_err(|e| request_error(url, e))?;
         if resp.status().is_success() {
             resp.text().map_err(|e| e.to_string())
         } else {
@@ -161,7 +191,7 @@ mod cli_impl {
             .header("Content-Type", "application/json")
             .body(body.to_owned())
             .send()
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| request_error(url, e))?;
         if resp.status().is_success() {
             resp.text().map_err(|e| e.to_string())
         } else {
@@ -178,7 +208,7 @@ mod cli_impl {
             .header("Content-Type", "application/json")
             .body(body.to_owned())
             .send()
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| request_error(url, e))?;
         if resp.status().is_success() {
             resp.text().map_err(|e| e.to_string())
         } else {
@@ -190,7 +220,10 @@ mod cli_impl {
 
     fn do_delete(url: &str) -> Result<String, String> {
         let client = reqwest::blocking::Client::new();
-        let resp = client.delete(url).send().map_err(|e| e.to_string())?;
+        let resp = client
+            .delete(url)
+            .send()
+            .map_err(|e| request_error(url, e))?;
         if resp.status().is_success() {
             resp.text().map_err(|e| e.to_string())
         } else {
@@ -389,8 +422,34 @@ mod cli_impl {
                     "{}/admin/export?format={format}&hours={hours}",
                     cli.base_url
                 );
-                let body = do_get(&url)?;
-                println!("{body}");
+                println!("{}", do_get(&url)?);
+            }
+
+            Commands::ImportModels {
+                source,
+                db,
+                overwrite,
+            } => {
+                let runtime =
+                    tokio::runtime::Runtime::new().map_err(|e| format!("runtime: {e}"))?;
+                let report = runtime.block_on(async {
+                    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{db}"))
+                        .await
+                        .map_err(|e| format!("database: {e}"))?;
+                    llm_proxy::model_import::import_file(&pool, source, overwrite)
+                        .await
+                        .map_err(|e| e.to_string())
+                })?;
+                println!(
+                    "new={} skipped={} conflicts={} failed={}",
+                    report.counts.new,
+                    report.counts.skipped,
+                    report.counts.conflicts,
+                    report.counts.failed
+                );
+                for reason in report.reasons {
+                    println!("{reason}");
+                }
             }
         }
         Ok(())
@@ -675,10 +734,72 @@ mod cli_impl {
         // ── Connection error test (unreachable host) ─────────────────────
 
         #[test]
-        fn do_get_returns_error_on_connection_refused() {
-            // Use port 1 which is reserved and should refuse connections
-            let result = do_get("http://127.0.0.1:1/nonexistent");
-            assert!(result.is_err(), "should fail on refused connection");
+        fn do_get_returns_actionable_error_on_connection_refused() {
+            // Port 1 is reserved and should refuse connections.
+            let url = "http://127.0.0.1:1/nonexistent";
+            let error = do_get(url).unwrap_err();
+            assert!(error.contains(url));
+            assert!(error.contains("--base-url <gateway-url>"));
+        }
+
+        #[test]
+        fn export_get_uses_configured_base_url_and_query_parameters() {
+            let mut server = mockito::Server::new();
+            let mock = server
+                .mock("GET", "/admin/export")
+                .match_query(mockito::Matcher::AllOf(vec![
+                    mockito::Matcher::UrlEncoded("format".into(), "jsonl".into()),
+                    mockito::Matcher::UrlEncoded("hours".into(), "24".into()),
+                ]))
+                .with_status(200)
+                .with_body(r#"{"id":"request-1"}"#)
+                .create();
+
+            let url = format!("{}/admin/export?format=jsonl&hours=24", server.url());
+            assert_eq!(do_get(&url).unwrap(), r#"{"id":"request-1"}"#);
+            mock.assert();
+        }
+
+        #[test]
+        fn export_accepts_hours_long_option_without_conflicting_with_help() {
+            let cli = Cli::try_parse_from(["llm_proxy_cli", "export", "--hours", "12"]).unwrap();
+            assert!(matches!(
+                cli.command,
+                Commands::Export { hours: 12, format } if format == "jsonl"
+            ));
+        }
+
+        #[test]
+        fn request_error_redacts_url_credentials() {
+            let error = reqwest::blocking::get("http://127.0.0.1:1").unwrap_err();
+            let message = request_error("http://client-key@127.0.0.1:1/admin/export", error);
+            assert!(!message.contains("client-key"));
+            assert!(message.contains("127.0.0.1:1/admin/export"));
+        }
+
+        #[test]
+        fn redact_url_removes_credentials_from_malformed_url() {
+            let url = "http://user:topsecret[REDACTED]@127.0.0.1:1/admin/export";
+            let redacted = redact_url(url);
+            assert!(!redacted.contains("user"));
+            assert!(!redacted.contains("topsecret"));
+            assert_eq!(redacted, "http://127.0.0.1:1/admin/export");
+        }
+
+        #[test]
+        fn redact_url_hides_userinfo_in_url_without_scheme() {
+            let url = "user:secret[REDACTED]@127.0.0.1:1/admin/export?api_key=secret[REDACTED]";
+            let redacted = redact_url(url);
+            assert!(!redacted.contains("user"));
+            assert!(!redacted.contains("secret"));
+            assert_eq!(redacted, "[invalid URL]");
+        }
+
+        #[test]
+        fn redact_url_removes_query_parameters_from_valid_url() {
+            let redacted = redact_url("http://127.0.0.1:1/admin/export?api_key=secret[REDACTED]");
+            assert!(!redacted.contains("secret"));
+            assert_eq!(redacted, "http://127.0.0.1:1/admin/export");
         }
     }
 }

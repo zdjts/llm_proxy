@@ -4,14 +4,14 @@ export default {
     extend: {
       colors: {
         surface: {
-          50: '#fafaf7', 100: '#f4f1ec', 200: '#e5e0d9', 300: '#c9c1b7',
-          400: '#8e877d', 500: '#716b63', 600: '#59544d', 700: '#403d38',
-          800: '#292724', 900: '#191816',
+          50: '#fafaf7', 100: '#f7f6f2', 200: '#d4d4d0', 300: '#c4c4bf',
+          400: '#767673', 500: '#61615e', 600: '#525252', 700: '#333333',
+          800: '#202020', 900: '#0a0a0a',
         },
         primary: {
-          50: '#fcf1ef', 100: '#f8e5e2', 200: '#f0c8c1', 300: '#df9a8f',
-          400: '#c96557', 500: '#b04436', 600: '#a53b2f', 700: '#873027',
-          800: '#6f2923', 900: '#4a1e19',
+          50: '#fafaf7', 100: '#f2f2ef', 200: '#e4e4df', 300: '#d4d4d0',
+          400: '#767673', 500: '#525252', 600: '#333333', 700: '#0a0a0a',
+          800: '#0a0a0a', 900: '#0a0a0a',
         },
         accent: {
           50: '#f9f4e9', 100: '#f7eedb', 200: '#ebdbb7', 300: '#dec78c',
@@ -24,8 +24,9 @@ export default {
         info: { DEFAULT: '#4f7887', light: '#e5eff2', dark: '#3d6475' },
       },
       fontFamily: {
-        sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        sans: ['Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', 'Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
         mono: ['JetBrains Mono', 'SFMono-Regular', 'Consolas', 'monospace'],
+        serif: ['Noto Serif SC', 'Songti SC', 'Georgia', 'serif'],
       },
       borderRadius: { DEFAULT: '0.375rem', lg: '0.5rem', xl: '0.75rem' },
     },

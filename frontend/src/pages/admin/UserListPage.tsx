@@ -19,7 +19,7 @@ export function UserListPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-surface-200 pb-5"><div><h1 className="text-xl font-semibold text-surface-900 sm:text-2xl">{t.configAdmin.usersTitle}</h1><p className="mt-1 text-sm text-surface-500">{t.configAdmin.usersCount.replace('{count}', String(data?.total || 0))}</p></div><Button onClick={() => setShowCreate(true)}><Plus size={16} /> {t.configAdmin.addUser}</Button></div>
+      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-surface-200 pb-5"><div><h1 className="font-serif text-[26px] font-bold tracking-[0.005em] text-surface-900 sm:text-[32px]">{t.configAdmin.usersTitle}</h1><p className="mt-1 text-[14.5px] text-surface-600">{t.configAdmin.usersCount.replace('{count}', String(data?.total || 0))}</p></div><Button onClick={() => setShowCreate(true)}><Plus size={16} /> {t.configAdmin.addUser}</Button></div>
       {error && <ErrorState title={error} />}
       {isLoading ? <Skeleton className="h-64" /> : isError ? <ErrorState action={<Button size="sm" variant="secondary" onClick={() => refetch()}>{t.adminUi.retry}</Button>} /> : users.length === 0 ? <EmptyState title={t.adminUi.noUsers} /> : (
         <Table headers={[t.configAdmin.name, t.configAdmin.email, t.configAdmin.roles, t.adminUi.actions]} rows={users.map((u: Record<string, unknown>) => [
@@ -30,9 +30,9 @@ export function UserListPage() {
       )}
       <Modal open={showCreate} onClose={() => { clearForm(); setShowCreate(false); setError(''); }} title={t.configAdmin.createUser}>
         <div className="space-y-3">
-          <input className="w-full rounded-md border border-surface-200 px-3 py-2 text-sm" placeholder={t.configAdmin.name} value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
-          <input className="w-full rounded-md border border-surface-200 px-3 py-2 text-sm" placeholder={t.configAdmin.email} value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
-          <input className="w-full rounded-md border border-surface-200 px-3 py-2 text-sm" type="password" autoComplete="new-password" placeholder={t.configAdmin.password} value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} />
+          <input className="input-glass w-full" placeholder={t.configAdmin.name} value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
+          <input className="input-glass w-full" placeholder={t.configAdmin.email} value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} />
+          <input className="input-glass w-full" type="password" autoComplete="new-password" placeholder={t.configAdmin.password} value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} />
           <p className="text-xs text-surface-500">{t.adminUi.secretHint}</p>
           <div className="flex gap-2 justify-end pt-2"><Button variant="secondary" onClick={() => { clearForm(); setShowCreate(false); }}>{t.adminUi.cancel}</Button><Button onClick={() => createMut.mutate()} loading={createMut.isPending}>{t.adminUi.create}</Button></div>
         </div>

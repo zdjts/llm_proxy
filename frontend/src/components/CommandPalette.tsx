@@ -90,7 +90,7 @@ export function CommandPalette() {
             <button
               key={item.id}
               onClick={() => execute(item)}
-              className={`flex items-center gap-3 w-full px-3 py-2.5 rounded-lg text-sm text-left transition-colors ${i === selectedIndex ? 'bg-primary-50 text-primary-700' : 'text-surface-600 hover:bg-surface-50'}`}
+              className={`flex items-center gap-3 w-full px-3 py-2.5 rounded-lg text-sm text-left transition-colors ${i === selectedIndex ? 'bg-surface-100 text-surface-900' : 'text-surface-600 hover:bg-surface-50'}`}
             >
               <item.icon size={16} />
               {item.label}

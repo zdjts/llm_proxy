@@ -13,10 +13,10 @@ export function HelpPage() {
   return (
     <div className="space-y-6">
       <div className="border-b border-surface-200 pb-5">
-        <h1 className="text-xl font-semibold text-surface-900 sm:text-2xl">{t.help.title}</h1>
+        <h1 className="font-serif text-[26px] font-bold tracking-[0.005em] text-surface-900 sm:text-[32px]">{t.help.title}</h1>
         <p className="text-sm text-surface-500 mt-1">{t.help.subtitle}</p>
       </div>
-      {isLoading ? <Skeleton className="h-32 w-full" /> : isError ? <ErrorState action={<button type="button" className="btn-secondary text-xs" onClick={() => refetch()}>{t.common.uiRetry}</button>} /> : data?.runbook?.trim() ? <div className="glass-card rounded-lg overflow-hidden p-5 sm:p-6"><div className="prose max-w-none"><pre className="text-sm text-surface-600 whitespace-pre-wrap font-mono leading-relaxed bg-transparent p-0">{data.runbook}</pre></div></div> : <EmptyState title={t.help.empty} />}
+      {isLoading ? <Skeleton className="h-32 w-full" /> : isError ? <ErrorState action={<button type="button" className="btn-secondary text-xs" onClick={() => refetch()}>{t.common.uiRetry}</button>} /> : data?.runbook?.trim() ? <div className="glass-card overflow-hidden p-5 sm:p-6"><div className="prose max-w-none"><pre className="text-sm text-surface-600 whitespace-pre-wrap font-mono leading-relaxed bg-transparent p-0">{data.runbook}</pre></div></div> : <EmptyState title={t.help.empty} />}
     </div>
   );
 }

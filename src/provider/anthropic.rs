@@ -241,6 +241,8 @@ struct AnthropicRequest {
     temperature: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     top_p: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<serde_json::Value>,
     stream: bool,
 }
 
@@ -264,7 +266,10 @@ struct AnthropicResponse {
 struct AnthropicContent {
     #[serde(rename = "type")]
     type_: String,
-    text: String,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    thinking: Option<String>,
 }
 
 // ── Conversion ────────────────────────────────────────────────────────────
@@ -321,6 +326,12 @@ fn openai_to_anthropic_base(req: &ChatCompletionRequest, stream: bool) -> Anthro
         _ => None,
     };
 
+    let thinking = req
+        .extra
+        .get("thinking")
+        .cloned()
+        .or_else(|| req.extra.get("thinking_config").cloned());
+
     AnthropicRequest {
         model: req.model.clone(),
         max_tokens,
@@ -329,18 +340,35 @@ fn openai_to_anthropic_base(req: &ChatCompletionRequest, stream: bool) -> Anthro
         stop_sequences: stop,
         temperature: req.temperature,
         top_p: req.top_p,
+        thinking,
         stream,
     }
 }
 
 fn anthropic_to_openai(an: &AnthropicResponse, model: &str) -> ChatCompletionResponse {
+    let mut reasoning_parts = Vec::new();
     let content_text: String = an
         .content
         .iter()
-        .filter(|c| c.type_ == "text")
-        .map(|c| c.text.as_str())
+        .filter_map(|c| {
+            if c.type_ == "thinking" {
+                if let Some(text) = c.thinking.as_deref() {
+                    reasoning_parts.push(text.to_owned());
+                }
+                None
+            } else if c.type_ == "text" {
+                c.text.as_deref()
+            } else {
+                None
+            }
+        })
         .collect::<Vec<_>>()
         .join("");
+    let reasoning_content = if reasoning_parts.is_empty() {
+        None
+    } else {
+        Some(reasoning_parts.join(""))
+    };
 
     let finish_reason = match an.stop_reason.as_deref() {
         Some("end_turn") => Some("stop".into()),
@@ -382,6 +410,8 @@ fn anthropic_to_openai(an: &AnthropicResponse, model: &str) -> ChatCompletionRes
                 role: "assistant".into(),
                 content: Some(content_text),
                 tool_calls: None,
+                reasoning_content,
+                thinking: None,
             },
             finish_reason,
         }],

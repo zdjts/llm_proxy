@@ -31,8 +31,8 @@ export function ProviderListPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4 border-b border-surface-200 pb-5">
         <div>
-          <h1 className="text-xl font-semibold text-surface-900 sm:text-2xl">{t.configAdmin.providerTitle}</h1>
-          <p className="mt-1 text-sm text-surface-500">{t.configAdmin.providerSubtitle}</p>
+          <h1 className="font-serif text-[26px] font-bold tracking-[0.005em] text-surface-900 sm:text-[32px]">{t.configAdmin.providerTitle}</h1>
+          <p className="mt-1 text-[14.5px] text-surface-600">{t.configAdmin.providerSubtitle}</p>
         </div>
         <Button onClick={() => setShowCreate(true)}><Plus size={16} /> {t.configAdmin.addProvider}</Button>
       </div>
@@ -56,15 +56,15 @@ export function ProviderListPage() {
 
       <Modal open={showCreate} onClose={() => { setShowCreate(false); setFormError(''); }} title={t.configAdmin.addProvider}>
         <div className="space-y-3">
-          <input className="w-full rounded-md border border-surface-200 px-3 py-2 text-sm" placeholder={t.configAdmin.providerId} value={form.id} onChange={e => setForm({ ...form, id: e.target.value })} />
-          <select className="w-full rounded-md border border-surface-200 px-3 py-2 text-sm" value={form.kind} onChange={e => setForm({ ...form, kind: e.target.value })}>
+          <input className="input-glass w-full" placeholder={t.configAdmin.providerId} value={form.id} onChange={e => setForm({ ...form, id: e.target.value })} />
+          <select className="input-glass w-full" value={form.kind} onChange={e => setForm({ ...form, kind: e.target.value })}>
             <option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="gemini">Gemini</option>
             <option value="azure">Azure</option><option value="cohere">Cohere</option><option value="mistral">Mistral</option>
             <option value="ollama">Ollama</option><option value="vllm">vLLM</option>
           </select>
-          <input className="w-full rounded-md border border-surface-200 px-3 py-2 text-sm" placeholder={t.configAdmin.baseUrl} value={form.base_url} onChange={e => setForm({ ...form, base_url: e.target.value })} />
-          <input className="w-full rounded-md border border-surface-200 px-3 py-2 text-sm" placeholder={t.configAdmin.poolId} value={form.pool_id} onChange={e => setForm({ ...form, pool_id: e.target.value })} />
-          {formError && <p className="text-sm text-red-600">{formError}</p>}
+          <input className="input-glass w-full" placeholder={t.configAdmin.baseUrl} value={form.base_url} onChange={e => setForm({ ...form, base_url: e.target.value })} />
+          <input className="input-glass w-full" placeholder={t.configAdmin.poolId} value={form.pool_id} onChange={e => setForm({ ...form, pool_id: e.target.value })} />
+          {formError && <p className="text-sm text-danger-dark">{formError}</p>}
           <div className="flex gap-2 justify-end pt-2">
             <Button variant="secondary" onClick={() => setShowCreate(false)}>{t.adminUi.cancel}</Button>
             <Button onClick={() => createMutation.mutate()} loading={createMutation.isPending}>{t.adminUi.create}</Button>

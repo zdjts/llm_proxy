@@ -32,6 +32,26 @@ describe('site route architecture', () => {
     expect(screen.getByRole('button', { name: '打开导航' })).toHaveFocus();
   });
 
+  it('keeps login form visible after entering the console from the public shell', () => {
+    local(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route element={<PublicShell />}>
+            <Route path="/" element={<h1>Product page</h1>} />
+            <Route path="/login" element={<h1>Welcome Back</h1>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const shell = document.querySelector('.public-shell');
+    expect(shell).not.toBeNull();
+    expect(shell?.classList.contains('home-page')).toBe(false);
+
+    fireEvent.click(screen.getByRole('link', { name: 'Open console' }));
+    expect(screen.getByRole('heading', { name: 'Welcome Back' })).toBeVisible();
+  });
+
   it('localizes the network status route title and description', () => {
     const route = routeManifest.find((entry) => entry.key === 'networkStatus');
     local(<ManifestPage route={route!} />);

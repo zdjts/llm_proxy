@@ -111,7 +111,10 @@ pub fn build_router(
         api
     };
 
+    // axum extractors (Json/Bytes) enforce DefaultBodyLimit (2 MiB) independently of
+    // tower-http's RequestBodyLimitLayer. Raise both so max_body_bytes actually applies.
     let api = api
+        .layer(axum::extract::DefaultBodyLimit::max(limit))
         .layer(tower_http::limit::RequestBodyLimitLayer::new(limit))
         .route_layer(axum::middleware::from_fn_with_state(
             auth_state,

@@ -12,8 +12,8 @@ export function QuotasPage() {
   return (
     <div className="space-y-6">
       <div className="border-b border-surface-200 pb-5">
-        <h1 className="text-xl font-semibold text-surface-900 sm:text-2xl">{t.quotas.title}</h1>
-        <p className="text-sm text-surface-500 mt-1">{t.quotas.subtitle}</p>
+        <h1 className="font-serif text-[26px] font-bold tracking-[0.005em] text-surface-900 sm:text-[32px]">{t.quotas.title}</h1>
+        <p className="mt-1 text-[14.5px] text-surface-600">{t.quotas.subtitle}</p>
       </div>
 
       {isLoading ? <Skeleton className="h-32 w-full" /> : isError ? <ErrorState action={<button type="button" className="btn-secondary text-xs" onClick={() => refetch()}>{t.common.uiRetry}</button>} /> : data && data.length > 0 ? (
@@ -23,9 +23,9 @@ export function QuotasPage() {
             const reqPct = q.monthly_requests_limit ? Math.min(100, (q.monthly_requests_used / q.monthly_requests_limit) * 100) : 0;
 
             return (
-              <motion.div key={q.tenant_id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="glass-card rounded-lg p-5">
+              <motion.div key={q.tenant_id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-5">
                 <div className="flex items-center gap-2.5 mb-5">
-                  <div className="w-8 h-8 rounded-xl bg-primary-50 flex items-center justify-center"><Gauge size={16} className="text-primary-600" /></div>
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-surface-200 bg-surface-50"><Gauge size={17} className="text-surface-800" /></div>
                   <h3 className="text-lg font-semibold text-surface-800">{q.tenant_id}</h3>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -37,12 +37,12 @@ export function QuotasPage() {
                         <span className="text-surface-400"> / {q.daily_tokens_limit?.toLocaleString() ?? <Infinity size={12} className="inline" />}</span>
                       </span>
                     </div>
-                    <div className="h-3 rounded-full bg-surface-100 overflow-hidden">
+                    <div className="h-2 overflow-hidden rounded-full bg-surface-100">
                       <motion.div initial={{ width: 0 }} animate={{ width: `${q.daily_tokens_limit ? tokenPct : Math.min(100, (q.daily_tokens_used / 10000) * 100)}%` }} transition={{ duration: 0.6, ease: 'easeOut' }}
-                        className={`h-full rounded-full ${q.daily_tokens_limit ? (tokenPct > 95 ? 'bg-red-500' : tokenPct > 80 ? 'bg-amber-500' : 'bg-emerald-500') : 'bg-emerald-200'}`} />
+                        className={`h-full rounded-full ${q.daily_tokens_limit ? (tokenPct > 95 ? 'bg-surface-900' : tokenPct > 80 ? 'bg-surface-700' : 'bg-surface-500') : 'bg-surface-300'}`} />
                     </div>
                     {tokenPct >= 80 && q.daily_tokens_limit && (
-                      <p className={`text-[11px] mt-1.5 ${tokenPct > 95 ? 'text-red-600' : 'text-amber-600'} font-medium`}>{tokenPct > 95 ? t.quotas.critical : t.quotas.warning}</p>
+                      <p className={`text-[11px] mt-1.5 text-surface-600 font-medium`}>{tokenPct > 95 ? t.quotas.critical : t.quotas.warning}</p>
                     )}
                   </div>
                   <div>
@@ -53,12 +53,12 @@ export function QuotasPage() {
                         <span className="text-surface-400"> / {q.monthly_requests_limit?.toLocaleString() ?? <Infinity size={12} className="inline" />}</span>
                       </span>
                     </div>
-                    <div className="h-3 rounded-full bg-surface-100 overflow-hidden">
+                    <div className="h-2 overflow-hidden rounded-full bg-surface-100">
                       <motion.div initial={{ width: 0 }} animate={{ width: `${q.monthly_requests_limit ? reqPct : Math.min(100, (q.monthly_requests_used / 1000) * 100)}%` }} transition={{ duration: 0.6, ease: 'easeOut' }}
-                        className={`h-full rounded-full ${q.monthly_requests_limit ? (reqPct > 95 ? 'bg-red-500' : reqPct > 80 ? 'bg-amber-500' : 'bg-blue-500') : 'bg-blue-200'}`} />
+                        className={`h-full rounded-full ${q.monthly_requests_limit ? (reqPct > 95 ? 'bg-surface-900' : reqPct > 80 ? 'bg-surface-700' : 'bg-surface-500') : 'bg-surface-300'}`} />
                     </div>
                     {reqPct >= 80 && q.monthly_requests_limit && (
-                      <p className={`text-[11px] mt-1.5 ${reqPct > 95 ? 'text-red-600' : 'text-amber-600'} font-medium`}>{reqPct > 95 ? t.quotas.critical : t.quotas.warning}</p>
+                      <p className={`text-[11px] mt-1.5 text-surface-600 font-medium`}>{reqPct > 95 ? t.quotas.critical : t.quotas.warning}</p>
                     )}
                   </div>
                 </div>

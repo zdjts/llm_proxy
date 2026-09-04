@@ -388,6 +388,8 @@ fn finish_reason_and_upstream_model_are_extracted() {
                 role: "assistant".into(),
                 content: Some("ok".into()),
                 tool_calls: None,
+                reasoning_content: None,
+                thinking: None,
             },
             finish_reason: Some("stop".into()),
         }],

@@ -306,10 +306,25 @@ export interface Messages {
     nav: { product: string; models: string; documentation: string; status: string; signIn: string; openNavigation: string; closeNavigation: string; publicNavigation: string; publicMobileNavigation: string; accountNavigation: string; accountMobileNavigation: string; footerTagline: string; accountLabel: string },
     actions: { openWorkspace: string; unavailable: string; documentation: string },
     hero: { eyebrow: string; operationalTitle: string; operationalDescription: string; authorizationNote: string },
-    public: { aboutBody: string; modelsBody: string; modelName: string; modelStatus: string; statusBody: string; statusOperational: string; statusUnavailable: string; contactBody: string; contactSupportBody: string; docsBody: string; docsTopics: string[]; guideBody: string; unavailableBody: string },
+    public: { aboutBody: string; modelsBody: string; modelName: string; modelStatus: string; modelInput: string; modelOutput: string; modelCacheRead: string; modelsSubtitle: string; modelsNote: string; modelsNote2: string; statusBody: string; statusOperational: string; statusUnavailable: string; statusAllOk: string; statusAllOkEn: string; statusCoreServices: string; statusLast30d: string; contactBody: string; contactSupportBody: string; contactEyebrow: string; contactCardCta: string; docsBody: string; docsTopics: string[]; guideBody: string; unavailableBody: string; backHome: string },
     account: { groups: Record<'workspace' | 'developer' | 'commercial' | 'community' | 'activities' | 'operator', string>; overviewBody: string; unavailableBody: string; unavailableAction: string; tableField: string; tableState: string; emptyState: string; editAction: string; exportAction: string; familyTitle: string; familyBody: string; familyState: string; familyAction: string; operatorTitle: string; operatorBody: string; operatorSearch: string; operatorFilter: string; operatorCreate: string; operatorExport: string },
     routes: Record<string, { title: string; description: string; action?: string }>,
     fallback: { title: string; description: string },
+    home: {
+      nav: { signIn: string; signUp: string; console: string; admin: string; models: string; status: string; docs: string; about: string; contact: string },
+      hero: { eyebrow: string; titleParts: { brand: string; mid: string; tail: string }; tagline: string; sub: string; activeOn: string; works: string[] },
+      cta: { start: string; console: string; docs: string; viewPrice: string },
+      channels: { tag: string; title: string; copyTitle: string; copyBody: string; items: { name: string; hint: string }[] },
+      sections: { featuresTag: string; featuresTitle: string; imageTag: string; imageTitle: string; imageLede: string; pricingTag: string; codeTag: string; codeTitle: string; codeLede: string },
+      onboard: { s1t: string; s1d: string; s2t: string; s2d: string; s3t: string; s3d: string; docLink: string; docLinkCta: string },
+      image: { badge: string; model: string; desc: string; caps: string[]; docLink: string },
+      features: { title: string; en: string; desc: string }[],
+      pricing: { lineA: string; lineB: string; lineC: string; blurb: string; tags: string[] },
+      footer: { tagline: string; docs: string; claudeCode: string; codex: string },
+      closer: { title: string; sub: string },
+      manifesto: { tag: string; title: string; integrity: string; body1: string; body2: string; pledges: { label: string; title: string; desc: string }[] },
+      stats: { requests: string; uptime: string; latency: string },
+    },
   };
   common: {
     csv: string;

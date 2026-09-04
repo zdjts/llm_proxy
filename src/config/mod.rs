@@ -67,13 +67,13 @@ pub struct Config {
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
-    /// Maximum request body size in bytes. Defaults to 10 MiB.
+    /// Maximum request body size in bytes. Defaults to 1 GiB.
     #[serde(default = "default_max_body_bytes")]
     pub max_body_bytes: usize,
 }
 
 fn default_max_body_bytes() -> usize {
-    10_485_760
+    1_073_741_824
 }
 
 /// Client-side authentication configuration.

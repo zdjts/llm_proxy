@@ -82,19 +82,32 @@ impl RelayState {
                         self.model = model.to_owned();
                     }
                 }
-                if let Some(chunk) = self.emit_chunk("assistant", None) {
+                if let Some(chunk) = self.emit_chunk("assistant", None, None) {
                     self.pending.push(chunk);
                 }
             }
             "content_block_delta" => {
-                let text = value
-                    .get("delta")
-                    .and_then(|d| d.get("text"))
+                let delta = value.get("delta");
+                let delta_type = delta
+                    .and_then(|d| d.get("type"))
                     .and_then(|t| t.as_str())
                     .unwrap_or("");
+                let text = if delta_type == "thinking_delta" {
+                    delta
+                        .and_then(|d| d.get("thinking"))
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("")
+                } else {
+                    delta
+                        .and_then(|d| d.get("text"))
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("")
+                };
                 self.content_idx =
                     value.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
-                if let Some(chunk) = self.emit_chunk(text, None) {
+                if let Some(chunk) =
+                    self.emit_chunk(text, None, (delta_type == "thinking_delta").then_some(true))
+                {
                     self.pending.push(chunk);
                 }
             }
@@ -118,7 +131,7 @@ impl RelayState {
                     self.streamed_tokens = ot as u32;
                 }
 
-                if let Some(chunk) = self.emit_chunk("", self.finish_reason.as_deref()) {
+                if let Some(chunk) = self.emit_chunk("", self.finish_reason.as_deref(), None) {
                     self.pending.push(chunk);
                 }
             }
@@ -149,9 +162,16 @@ impl RelayState {
         }
     }
 
-    fn emit_chunk(&self, text: &str, finish_reason: Option<&str>) -> Option<Bytes> {
+    fn emit_chunk(
+        &self,
+        text: &str,
+        finish_reason: Option<&str>,
+        reasoning: Option<bool>,
+    ) -> Option<Bytes> {
         let delta = if text == "assistant" {
             serde_json::json!({"role": "assistant"})
+        } else if reasoning == Some(true) {
+            serde_json::json!({"reasoning_content": text})
         } else if text.is_empty() {
             serde_json::json!({})
         } else {

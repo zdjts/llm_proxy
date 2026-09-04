@@ -4,65 +4,135 @@
 
 @layer base {
   :root {
-    color: #292724;
-    background: #fafaf7;
-    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color: #0a0a0a;
+    background: #f7f6f2;
+    font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", Inter, ui-sans-serif, system-ui, sans-serif;
     font-synthesis: none;
   }
 
   * { box-sizing: border-box; }
   html { font-size: 14px; overflow-x: hidden; }
-  body { min-width: 320px; min-height: 100vh; margin: 0; overflow-x: hidden; background: #fafaf7; }
+  body { min-width: 320px; min-height: 100vh; margin: 0; overflow-x: hidden; background: #f7f6f2; }
   button, input, select, textarea { font: inherit; }
   button:not(:disabled), [role="button"]:not([aria-disabled="true"]) { cursor: pointer; }
-  :focus-visible { outline: 2px solid #b04436; outline-offset: 2px; }
-  ::selection { color: #4a1e19; background: #f3d9d3; }
+  :focus-visible { outline: 2px solid #0a0a0a; outline-offset: 2px; }
+  ::selection { color: #0a0a0a; background: #e4e4df; }
   ::-webkit-scrollbar { width: 8px; height: 8px; }
-  ::-webkit-scrollbar-track { background: #f4f1ec; }
-  ::-webkit-scrollbar-thumb { background: #c9c1b7; border-radius: 4px; }
-  ::-webkit-scrollbar-thumb:hover { background: #a79d91; }
+  ::-webkit-scrollbar-track { background: #f7f6f2; }
+  ::-webkit-scrollbar-thumb { background: #d4d4d0; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #a8a8a2; }
+  h1, h2, h3 { font-family: "Noto Serif SC", "Songti SC", Georgia, serif; letter-spacing: .005em; }
 }
 
 @layer components {
   .glass {
     background: #ffffff;
-    border: 1px solid #e5e0d9;
-    box-shadow: 0 1px 2px rgba(41, 39, 36, 0.04), 0 4px 12px rgba(41, 39, 36, 0.03);
+    border: 1px solid #d4d4d0;
+    box-shadow: none;
   }
 
   .glass-card {
-    @apply rounded-xl border border-surface-200 bg-white;
-    box-shadow: 0 1px 2px rgba(41, 39, 36, 0.04), 0 4px 12px rgba(41, 39, 36, 0.03);
+    @apply rounded-2xl border bg-white;
+    border-color: #d4d4d0;
+    box-shadow: 0 8px 28px -18px rgba(10, 10, 10, 0.18);
+    transition: box-shadow 0.28s cubic-bezier(.16, 1, .3, 1);
   }
+  .glass-card:hover { box-shadow: 0 14px 34px -20px rgba(10, 10, 10, 0.24); }
 
-  .stat-card {
-    @apply glass-card p-4;
-  }
+  .stat-card { @apply glass-card p-4; }
 
   .btn-primary, .btn-gold {
-    @apply inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 rounded-[10px] px-4 py-2 text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50;
     color: #ffffff;
-    background: #a53b2f;
+    background: #0a0a0a;
   }
-  .btn-primary:hover, .btn-gold:hover { background: #873027; }
+  .btn-primary:hover, .btn-gold:hover { background: #b8413a; }
 
   .btn-secondary {
-    @apply inline-flex items-center justify-center gap-2 rounded-md border border-surface-200 bg-white px-3 py-2 text-sm font-medium text-surface-700 transition-colors disabled:pointer-events-none disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 rounded-[10px] border bg-white px-4 py-2 text-sm font-medium text-surface-700 transition-colors disabled:pointer-events-none disabled:opacity-50;
+    border-color: #d4d4d0;
   }
-  .btn-secondary:hover { background: #f4f1ec; border-color: #c9c1b7; }
+  .btn-secondary:hover { background: #fafaf7; border-color: #0a0a0a; color: #0a0a0a; }
 
   .input-glass {
-    @apply rounded-md border border-surface-200 bg-white px-3 py-2 text-sm text-surface-800 outline-none transition-colors;
+    @apply rounded-[10px] border bg-white px-3 py-2 text-sm text-surface-800 outline-none transition-colors;
+    border-color: #d4d4d0;
   }
-  .input-glass:hover { border-color: #c9c1b7; }
-  .input-glass:focus { border-color: #b04436; box-shadow: 0 0 0 3px rgba(176, 68, 54, 0.14); }
-  .input-glass::placeholder { color: #8e877d; }
+  .input-glass:hover { border-color: #a8a8a2; }
+  .input-glass:focus { border-color: #0a0a0a; box-shadow: 0 0 0 3px rgba(10, 10, 10, 0.08); }
+  .input-glass::placeholder { color: #767673; }
 
   .badge { @apply inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium; }
+
+  .auth-page .btn-primary { border-radius: 999px; }
   .badge-success { background: #e4f1e7; color: #27633b; }
   .badge-error { background: #f8e5e2; color: #9a3026; }
   .badge-warn { background: #f7eedb; color: #80611f; }
-  .badge-info, .badge-purple { background: #ebe8e2; color: #5d574f; }
+  .badge-info, .badge-purple { background: #f2f2ef; color: #525252; }
+
+  .public-back-link { display: inline-flex; align-items: center; gap: 6px; color: #525252; font-size: 13px; text-decoration: none; transition: color .18s ease; }
+  .public-back-link:hover { color: #0a0a0a; }
+  .public-eyebrow { margin: 0 0 14px; color: #b8413a; font-family: Georgia, "Noto Serif SC", serif; font-size: 11px; font-style: italic; letter-spacing: .2em; text-transform: uppercase; }
+  .public-document { min-height: calc(100vh - 8rem); background: #fafaf7; color: #0a0a0a; }
+  .public-document-header, .public-document-body { max-width: 760px; margin: 0 auto; padding-left: 32px; padding-right: 32px; }
+  .public-document-header { padding-top: 48px; padding-bottom: 40px; }
+  .public-document-header .public-eyebrow { margin-top: 24px; }
+  .public-document-title { margin: 0 0 18px; color: #0a0a0a; font-family: "Noto Serif SC", "Songti SC", Georgia, serif; font-size: clamp(34px, 5vw, 52px); font-weight: 700; line-height: 1.15; }
+  .public-document-lede { margin: 0; color: #404040; font-size: 16px; line-height: 1.8; }
+  .public-document-body { padding-bottom: 80px; }
+  .public-document-body section { margin-top: 58px; border-top: 1px solid #e7d8ba; padding-top: 28px; }
+  .public-document-body section.public-document-accent { margin-left: -32px; margin-right: -32px; border-top-color: #b8413a; border-radius: 12px; padding: 28px 32px; background: linear-gradient(180deg, rgba(184,65,58,.025), transparent 60%); }
+  .public-section-number { display: block; margin-bottom: 10px; color: #b8413a; font-family: Georgia, serif; font-size: 12px; font-style: italic; letter-spacing: .18em; }
+  .public-document-body h2, .public-models-subtitle { margin: 0 0 14px; color: #0a0a0a; font-family: "Noto Serif SC", "Songti SC", Georgia, serif; font-size: 24px; font-weight: 700; }
+  .public-document-body p { margin: 0; color: #404040; font-size: 15px; line-height: 1.8; }
+  .public-models, .public-contact, .public-status { min-height: calc(100vh - 8rem); background: #f7f6f2; color: #0a0a0a; }
+  .public-models, .public-contact { padding: 30px 32px 90px; }
+  .public-models main { max-width: 720px; margin: 0 auto; padding-top: 68px; }
+  .public-models .public-document-lede { margin-bottom: 44px; }
+  .public-model-table-wrap { overflow-x: auto; }
+  .public-model-table { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 1.6; }
+  .public-model-table th { padding: 8px 12px; border-bottom: 1px solid #0a0a0a; color: #767673; font-size: 11px; font-weight: 500; letter-spacing: .08em; text-align: left; text-transform: uppercase; }
+  .public-model-table td { padding: 12px; border-bottom: 1px solid #d4d4d0; color: #525252; }
+  .public-model-table td:first-child { color: #0a0a0a; }
+  .public-model-note { margin: 16px 0 0; color: #767673; font-size: 13px; line-height: 1.9; }
+  .public-status { max-width: 1120px; margin: 0 auto; padding: 56px 24px 80px; }
+  .public-status header { margin-bottom: 36px; }
+  .public-status header > p:last-child { margin: 12px 0 0; color: #525252; font-size: 14px; }
+  .public-status-hero { display: flex; align-items: center; gap: 18px; margin-bottom: 40px; border: 1px solid #d4d4d0; border-radius: 18px; padding: 26px 30px; background: #fff; }
+  .public-status-dot { width: 14px; height: 14px; flex: 0 0 auto; border-radius: 999px; background: #4a7c59; }
+  .public-status-hero h2, .public-status-grid h2 { margin: 0; font-family: "Noto Serif SC", "Songti SC", Georgia, serif; font-size: 20px; font-weight: 700; }
+  .public-status-hero p, .public-status-grid p { margin: 8px 0 0; color: #525252; font-size: 14px; line-height: 1.7; }
+  .public-status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+  .public-contact main { max-width: 920px; margin: 0 auto; padding-top: 72px; }
+  .public-contact-lede { max-width: 620px; margin: 0 0 38px; color: #404040; font-size: 16px; line-height: 1.8; }
+  .public-contact-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 380px)); gap: 18px; }
+  .public-contact-card { display: flex; flex-direction: column; gap: 14px; border: 0; border-radius: 20px; padding: 22px 22px 20px; background: #fff; color: inherit; text-decoration: none; box-shadow: 0 0 0 1px rgba(0,0,0,.04), 0 4px 12px -2px rgba(0,0,0,.08); transition: transform .28s cubic-bezier(.16,1,.3,1), box-shadow .28s cubic-bezier(.16,1,.3,1); }
+  .public-contact-card:not(.public-contact-card-muted):hover { transform: translateY(-3px); box-shadow: 0 0 0 1px rgba(10,10,10,.12), 0 12px 26px -10px rgba(0,0,0,.18); }
+  .public-contact-card-muted { background: #fafaf7; }
+  .public-contact-icon { display: grid; width: 42px; height: 42px; place-items: center; border: 1px solid #e4e4df; border-radius: 12px; color: #0a0a0a; font-family: Georgia, serif; font-size: 22px; }
+  .public-contact-card h2 { margin: 0; font-family: "Noto Serif SC", "Songti SC", Georgia, serif; font-size: 20px; }
+  .public-contact-card p { margin: 0; color: #525252; font-size: 13.5px; line-height: 1.7; }
+  .public-contact-action { display: inline-flex; align-items: center; gap: 7px; margin-top: auto; color: #0a0a0a; font-size: 13px; }
+  .auth-unavailable { min-height: 100vh; background: #f7f6f2; color: #0a0a0a; }
+  .auth-unavailable-inner { max-width: 1200px; margin: 0 auto; padding: 30px 24px 80px; }
+  .auth-unavailable-card { width: min(480px, 100%); margin: 72px auto 0; border: 1px solid #d4d4d0; border-radius: 18px; padding: 36px 32px; background: linear-gradient(180deg, #fff, #fefdfa 55%, #fbf9f4); text-align: center; box-shadow: 0 30px 60px -28px rgba(0,0,0,.08); }
+  .auth-unavailable-mark { display: grid; width: 52px; height: 52px; margin: 0 auto 12px; place-items: center; border: 1px solid #d4d4d0; border-radius: 14px; font-family: Georgia, serif; font-size: 24px; font-weight: 700; }
+  .auth-unavailable-brand { margin: 0 0 30px; color: #0a0a0a; font-family: Georgia, "Noto Serif SC", serif; font-size: 26px; font-weight: 700; letter-spacing: .04em; }
+  .auth-unavailable-card h1 { margin: 0; font-family: "Noto Serif SC", "Songti SC", Georgia, serif; font-size: 26px; font-weight: 700; }
+  .auth-unavailable-copy { margin: 10px auto 0; max-width: 34ch; color: #525252; font-size: 14px; line-height: 1.7; }
+  .auth-unavailable-foot { margin: 22px 0 0; color: #767673; font-size: 12px; line-height: 1.6; }
+  .public-docs { min-height: calc(100vh - 8rem); background: #fff; color: #0a0a0a; }
+  .public-docs-topbar { position: sticky; top: 0; z-index: 2; display: flex; max-width: 1200px; margin: 0 auto; align-items: center; justify-content: space-between; gap: 18px; border-bottom: 1px solid #d4d4d0; padding: 14px 24px; background: rgba(255,255,255,.92); backdrop-filter: blur(8px); }
+  .public-docs-shell { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 36px; max-width: 1200px; margin: 0 auto; align-items: start; padding: 24px; }
+  .public-docs-sidebar { position: sticky; top: 80px; display: flex; flex-direction: column; gap: 4px; color: #525252; font-size: 13px; }
+  .public-docs-sidebar span { border-radius: 10px; padding: 9px 12px; }
+  .public-docs-sidebar-active { background: #0a0a0a; color: #fff; }
+  .public-docs-article { min-width: 0; padding: 12px 0 80px; }
+  .public-docs-article h1 { margin: 0 0 14px; font-family: "Noto Serif SC", "Songti SC", Georgia, serif; font-size: clamp(30px, 5vw, 46px); line-height: 1.15; }
+  .public-docs-article > p:not(.public-eyebrow) { max-width: 600px; margin: 0; color: #525252; font-size: 15px; line-height: 1.7; }
+  .public-docs-placeholder { display: flex; align-items: center; gap: 10px; min-height: 180px; margin: 36px 0 22px; border: 1px dashed #d4d4d0; border-radius: 10px; padding: 24px; color: #767673; font-size: 14px; }
+  @media (max-width: 900px) { .public-docs-shell { grid-template-columns: 1fr; } .public-docs-sidebar { position: relative; top: 0; } }
+  @media (max-width: 640px) { .public-document-header, .public-document-body { padding-left: 20px; padding-right: 20px; } .public-document-header { padding-top: 40px; padding-bottom: 28px; } .public-document-title { font-size: 32px; } .public-document-body { padding-bottom: 60px; } .public-document-body section { margin-top: 48px; padding-top: 24px; } .public-document-body section.public-document-accent { margin-left: -20px; margin-right: -20px; padding: 24px 20px; } .public-models, .public-contact { padding-left: 20px; padding-right: 20px; } .public-models main, .public-contact main { padding-top: 40px; } .public-contact-grid { grid-template-columns: 1fr; } .public-status { padding: 40px 20px 60px; } .public-status-hero { align-items: flex-start; padding: 22px; } .auth-unavailable-inner { padding: 24px 20px 60px; } .auth-unavailable-card { margin-top: 48px; padding: 30px 22px; } .public-docs-topbar { padding-left: 20px; padding-right: 20px; } .public-docs-shell { padding: 20px; } }
 }
 
 @layer utilities {

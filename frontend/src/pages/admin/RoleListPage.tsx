@@ -13,9 +13,9 @@ const BUILT_IN_ROLES = [
 export function RoleListPage() {
   const { t } = useLocale();
   return <div className="space-y-6">
-    <header className="border-b border-surface-200 pb-5"><h1 className="text-xl font-semibold text-surface-900 sm:text-2xl">{t.configAdmin.rolesTitle}</h1><p className="mt-1 text-sm text-surface-500">{t.configAdmin.rolesSubtitle}</p></header>
+    <header className="border-b border-surface-200 pb-5"><h1 className="font-serif text-[26px] font-bold tracking-[0.005em] text-surface-900 sm:text-[32px]">{t.configAdmin.rolesTitle}</h1><p className="mt-1 text-[14.5px] text-surface-600">{t.configAdmin.rolesSubtitle}</p></header>
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-      {BUILT_IN_ROLES.map((role) => <Card key={role.id} className="rounded-lg p-5"><h2 className="mb-3 font-semibold text-surface-900">{role.name}</h2><div className="flex flex-wrap gap-1.5">{role.permissions.map((permission) => <Badge key={permission} variant="info">{permission}</Badge>)}</div></Card>)}
+      {BUILT_IN_ROLES.map((role) => <Card key={role.id} className="p-5"><h2 className="mb-3 font-semibold text-surface-900">{role.name}</h2><div className="flex flex-wrap gap-1.5">{role.permissions.map((permission) => <Badge key={permission} variant="info">{permission}</Badge>)}</div></Card>)}
     </div>
   </div>;
 }
