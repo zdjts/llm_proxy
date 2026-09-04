@@ -167,15 +167,37 @@ impl ConfigStore {
         let mut tx = self.db.begin().await.map_err(|e| {
             AppError::Internal(format!("ConfigStore begin import transaction: {e}"))
         })?;
+
+        // Full-document replace for managed sections so export→import between
+        // hosts converges instead of leaving stale pools/providers/routes.
+        // model_registry is still upsert-only: empty export must not wipe catalog.
+        // Order matters: routing_config.pool_id FK → key_pool; key_entry cascades.
+        sqlx::query("DELETE FROM routing_config")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AppError::Internal(format!("ConfigStore clear routing: {e}")))?;
+        sqlx::query("DELETE FROM key_entry")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AppError::Internal(format!("ConfigStore clear keys: {e}")))?;
+        sqlx::query("DELETE FROM key_pool")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AppError::Internal(format!("ConfigStore clear pools: {e}")))?;
+        sqlx::query("DELETE FROM provider_config")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AppError::Internal(format!("ConfigStore clear providers: {e}")))?;
+
         for (pool_id, pool_cfg) in &config.pools {
-            sqlx::query("INSERT INTO key_pool (id, strategy, enabled) VALUES (?1, ?2, 1) ON CONFLICT(id) DO UPDATE SET strategy = excluded.strategy, enabled = 1")
-                .bind(pool_id).bind(match pool_cfg.strategy { PoolStrategy::WeightedRandom => "weighted_random" })
-                .execute(&mut *tx).await.map_err(|e| AppError::Internal(format!("ConfigStore import pool: {e}")))?;
-            sqlx::query("DELETE FROM key_entry WHERE pool_id = ?1")
+            sqlx::query("INSERT INTO key_pool (id, strategy, enabled) VALUES (?1, ?2, 1)")
                 .bind(pool_id)
+                .bind(match pool_cfg.strategy {
+                    PoolStrategy::WeightedRandom => "weighted_random",
+                })
                 .execute(&mut *tx)
                 .await
-                .map_err(|e| AppError::Internal(format!("ConfigStore import pool keys: {e}")))?;
+                .map_err(|e| AppError::Internal(format!("ConfigStore import pool: {e}")))?;
             for key_entry in &pool_cfg.keys {
                 let kh = crate::db::compute_key_hash(&key_entry.key);
                 sqlx::query("INSERT INTO key_entry (pool_id, key_hash, key_plain, weight, enabled) VALUES (?1, ?2, ?3, ?4, 1)")
@@ -199,7 +221,7 @@ impl ConfigStore {
                     object.insert("region".into(), serde_json::Value::String(region.clone()));
                 }
             }
-            sqlx::query("INSERT INTO provider_config (id, kind, base_url, pool_id, enabled, metadata) VALUES (?1, ?2, ?3, ?4, 1, ?5) ON CONFLICT(id) DO UPDATE SET kind = excluded.kind, base_url = excluded.base_url, pool_id = excluded.pool_id, enabled = 1, metadata = excluded.metadata")
+            sqlx::query("INSERT INTO provider_config (id, kind, base_url, pool_id, enabled, metadata) VALUES (?1, ?2, ?3, ?4, 1, ?5)")
                 .bind(&provider.id).bind(provider_kind_to_str(&provider.kind)).bind(&provider.base_url)
                 .bind(&provider.pool_id).bind(serde_json::to_string(&metadata).unwrap_or_default())
                 .execute(&mut *tx).await.map_err(|e| AppError::Internal(format!("ConfigStore import provider: {e}")))?;
@@ -208,11 +230,6 @@ impl ConfigStore {
             let params = routing
                 .default_params()
                 .map(|v| serde_json::to_string(v).unwrap_or_default());
-            sqlx::query("DELETE FROM routing_config WHERE logical_model = ?1")
-                .bind(model)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| AppError::Internal(format!("ConfigStore import routing: {e}")))?;
             sqlx::query("INSERT INTO routing_config (logical_model, pool_id, default_params, enabled) VALUES (?1, ?2, ?3, 1)")
                 .bind(model).bind(routing.pool_id()).bind(params.as_deref()).execute(&mut *tx).await
                 .map_err(|e| AppError::Internal(format!("ConfigStore import routing: {e}")))?;
@@ -556,7 +573,7 @@ fn provider_kind_to_str(kind: &ProviderKind) -> &'static str {
 
 fn str_to_provider_kind(s: &str) -> Result<ProviderKind, AppError> {
     match s {
-        "openai" => Ok(ProviderKind::OpenAi),
+        "openai" | "open_ai" => Ok(ProviderKind::OpenAi),
         "anthropic" => Ok(ProviderKind::Anthropic),
         "gemini" => Ok(ProviderKind::Gemini),
         "azure" => Ok(ProviderKind::Azure),
@@ -618,6 +635,27 @@ mod tests {
             Some(321)
         );
     }
+    #[tokio::test]
+    async fn import_yaml_replaces_managed_sections_instead_of_merging() {
+        let (pool, _dir) = setup_test_db().await;
+        let store = ConfigStore::load(pool.clone()).await.unwrap();
+        store.import_yaml(test_yaml_document()).await.unwrap();
+
+        let replacement = "server:\n  host: 127.0.0.1\n  port: 4000\nauth:\n  client_keys: []\ndb:\n  path: ./test.db\nfailover:\n  enabled: true\npools:\n  only_pool:\n    keys:\n      - key: sk-only\n        weight: 1\nproviders:\n  - id: only_provider\n    kind: open_ai\n    pool_id: only_pool\n    base_url: https://only.example/v1\nmodel_to_pool:\n  only-model: only_pool\n";
+        store.import_yaml(replacement).await.unwrap();
+
+        let snap = store.snapshot().await;
+        assert_eq!(snap.pool_configs.len(), 1);
+        assert!(snap.pool_configs.contains_key("only_pool"));
+        assert!(!snap.pool_configs.contains_key("test_pool"));
+        assert_eq!(snap.providers.len(), 1);
+        assert_eq!(snap.providers[0].id, "only_provider");
+        assert_eq!(snap.providers[0].kind, ProviderKind::OpenAi);
+        assert_eq!(snap.model_routing.len(), 1);
+        assert!(snap.model_routing.contains_key("only-model"));
+        assert!(!snap.model_routing.contains_key("test-model"));
+    }
+
     #[tokio::test]
     async fn invalid_yaml_import_keeps_database_and_snapshot_unchanged() {
         let (pool, _dir) = setup_test_db().await;

@@ -139,6 +139,7 @@ struct ExportKey {
 struct ExportServer {
     host: String,
     port: u16,
+    max_body_bytes: usize,
 }
 
 #[derive(Serialize)]
@@ -181,8 +182,10 @@ fn pool_strategy_to_yaml(strategy: &crate::config::PoolStrategy) -> &'static str
 }
 
 fn provider_kind_to_yaml(kind: &crate::config::ProviderKind) -> &'static str {
+    // Keep export names identical to ConfigStore/DB (`openai`), not serde's
+    // default `open_ai`, so export → validate → import round-trips cleanly.
     match kind {
-        crate::config::ProviderKind::OpenAi => "open_ai",
+        crate::config::ProviderKind::OpenAi => "openai",
         crate::config::ProviderKind::Anthropic => "anthropic",
         crate::config::ProviderKind::Gemini => "gemini",
         crate::config::ProviderKind::Azure => "azure",
@@ -283,7 +286,10 @@ pub async fn admin_api_config_export(
         server: ExportServer {
             host: state.config.server.host.clone(),
             port: state.config.server.port,
+            max_body_bytes: state.config.server.max_body_bytes,
         },
+        // Client keys stay bootstrap-only (ADR-017): hashes are not reversible,
+        // so export never fabricates plaintext auth material.
         auth: ExportAuth {
             client_keys: Vec::new(),
         },

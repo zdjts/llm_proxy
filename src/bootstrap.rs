@@ -83,10 +83,23 @@ pub async fn bootstrap(config_path: &str) -> anyhow::Result<BootedApp> {
         sqlx::query_scalar("SELECT COUNT(*) FROM routing_config WHERE enabled = 1")
             .fetch_one(&pool)
             .await?;
-    if routing_count == 0 {
+    // Default: seed managed tables only when empty (ADR-017). Set
+    // LLM_PROXY_SYNC_YAML=1 to force a full replace from the startup YAML file
+    // (useful when copying config.yaml between hosts).
+    let force_yaml_sync = std::env::var("LLM_PROXY_SYNC_YAML")
+        .map(|v| {
+            let v = v.trim();
+            v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes")
+        })
+        .unwrap_or(false);
+    if force_yaml_sync || routing_count == 0 {
         let yaml = tokio::fs::read_to_string(config_path).await?;
         config_store.import_yaml(&yaml).await?;
-        tracing::info!("initialized managed configuration from YAML");
+        if force_yaml_sync {
+            tracing::info!("synchronized managed configuration from YAML (LLM_PROXY_SYNC_YAML)");
+        } else {
+            tracing::info!("initialized managed configuration from YAML");
+        }
     }
     config_store
         .set_bootstrap_pricing(config.pricing.clone())

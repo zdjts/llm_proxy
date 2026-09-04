@@ -142,9 +142,13 @@ pub enum PoolStrategy {
 }
 
 /// Provider kind for dispatch.
+///
+/// Wire name is `openai` (matches DB / docs). `open_ai` is accepted as a
+/// legacy alias from older admin exports.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
+    #[serde(rename = "openai", alias = "open_ai")]
     OpenAi,
     Anthropic,
     Gemini,

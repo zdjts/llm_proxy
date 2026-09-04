@@ -379,7 +379,7 @@ async fn provider_pool_and_routing_guards_require_distinct_permissions() {
     let cases = [
         (
             "/admin/api/providers",
-            serde_json::json!({"id":"p","kind":"open_ai","base_url":"http://x","pool_id":"missing"}),
+            serde_json::json!({"id":"p","kind":"openai","base_url":"http://x","pool_id":"missing"}),
         ),
         (
             "/admin/api/pools",
@@ -973,7 +973,9 @@ async fn config_export_allows_provider_management_permission() {
         .unwrap();
     let yaml = String::from_utf8(body.to_vec()).unwrap();
     assert!(yaml.contains("server:\n  host: 127.0.0.1\n  port: 4000"));
+    assert!(yaml.contains("max_body_bytes:"));
     assert!(yaml.contains("db:\n  path: ./test.db"));
+    assert!(!yaml.contains("kind: open_ai"), "export must use openai not open_ai");
     llm_proxy::config_store::ConfigStore::validate_yaml(&yaml).unwrap();
 }
 
