@@ -8,8 +8,12 @@
 .env
 *.env
 config.yaml
+config.yaml.*
+config1.yaml
 !tests/fixtures/config.yaml
 data/
+models-store.json
+orc.toml
 test-gateway.sh
 docs/*
 !docs/adr-017-runtime-boundaries.md
