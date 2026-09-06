@@ -4,11 +4,9 @@
 //! `https://{resource}.openai.azure.com/openai/deployments/{deployment}/chat/completions?api-version={version}`
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::stream::StreamExt;
-use reqwest::Client;
 
 use crate::config::KeyEntry;
 use crate::error::AppError;
@@ -20,7 +18,7 @@ pub struct AzureProvider {
     base_url: String,
     api_version: String,
     bad_status_codes: Arc<[u16]>,
-    client: Client,
+    client: reqwest::Client,
 }
 
 impl AzureProvider {
@@ -30,18 +28,12 @@ impl AzureProvider {
         api_version: String,
         bad_status_codes: Arc<[u16]>,
     ) -> Self {
-        let client = reqwest::Client::builder()
-            .pool_max_idle_per_host(8)
-            .timeout(Duration::from_secs(120))
-            .user_agent("llm_proxy/2.0")
-            .build()
-            .expect("reqwest Client::builder should not fail");
         Self {
             id,
             base_url,
             api_version,
             bad_status_codes,
-            client,
+            client: crate::provider::http::build_http_client(),
         }
     }
 }

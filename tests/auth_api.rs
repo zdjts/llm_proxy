@@ -975,7 +975,10 @@ async fn config_export_allows_provider_management_permission() {
     assert!(yaml.contains("server:\n  host: 127.0.0.1\n  port: 4000"));
     assert!(yaml.contains("max_body_bytes:"));
     assert!(yaml.contains("db:\n  path: ./test.db"));
-    assert!(!yaml.contains("kind: open_ai"), "export must use openai not open_ai");
+    assert!(
+        !yaml.contains("kind: open_ai"),
+        "export must use openai not open_ai"
+    );
     llm_proxy::config_store::ConfigStore::validate_yaml(&yaml).unwrap();
 }
 

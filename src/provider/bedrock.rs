@@ -18,7 +18,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use reqwest::Client;
 
 use crate::config::KeyEntry;
 use crate::error::AppError;
@@ -31,7 +30,7 @@ pub struct BedrockProvider {
     base_url: String,
     region: String,
     bad_status_codes: Arc<[u16]>,
-    client: Client,
+    client: reqwest::Client,
 }
 
 impl BedrockProvider {
@@ -41,7 +40,7 @@ impl BedrockProvider {
             base_url,
             region,
             bad_status_codes,
-            client: Client::new(),
+            client: crate::provider::http::build_http_client(),
         }
     }
 }

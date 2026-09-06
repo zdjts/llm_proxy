@@ -4,7 +4,6 @@
 //! Non-streaming only in this commit; streaming lands in T23.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::stream::StreamExt;
@@ -25,16 +24,10 @@ pub struct GeminiProvider {
 
 impl GeminiProvider {
     pub fn new(id: String, base_url: String, bad_status_codes: Arc<[u16]>) -> Self {
-        let client = reqwest::Client::builder()
-            .pool_max_idle_per_host(32)
-            .timeout(Duration::from_secs(120))
-            .user_agent("llm_proxy/0.2")
-            .build()
-            .expect("reqwest client builder");
         Self {
             id,
             base_url,
-            client,
+            client: crate::provider::http::build_http_client(),
             bad_status_codes,
         }
     }

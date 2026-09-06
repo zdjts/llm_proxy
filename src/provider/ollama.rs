@@ -7,14 +7,13 @@ use crate::error::AppError;
 use crate::provider::{Provider, ProviderCapabilities, ProviderResponse};
 use crate::types::ChatCompletionRequest;
 use async_trait::async_trait;
-use reqwest::Client;
 use std::sync::Arc;
 
 pub struct OllamaProvider {
     id: String,
     base_url: String,
     bad_status_codes: Arc<[u16]>,
-    client: Client,
+    client: reqwest::Client,
 }
 
 impl OllamaProvider {
@@ -23,7 +22,7 @@ impl OllamaProvider {
             id,
             base_url,
             bad_status_codes,
-            client: Client::new(),
+            client: crate::provider::http::build_http_client(),
         }
     }
 }

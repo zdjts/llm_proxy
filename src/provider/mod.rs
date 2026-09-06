@@ -21,6 +21,7 @@ pub mod bedrock;
 pub mod cohere;
 pub mod gemini;
 pub mod gemini_stream;
+pub mod http;
 pub mod inspector;
 pub mod mistral;
 pub mod ollama;

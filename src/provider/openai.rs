@@ -15,7 +15,6 @@
 //! | connect / timeout | `{status:None, retryable:true, bad_key_hint:false}` |
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::stream::StreamExt;
@@ -37,21 +36,13 @@ pub struct OpenAiProvider {
 impl OpenAiProvider {
     /// Create a new provider.
     ///
-    /// The internal `reqwest::Client` is configured with rustls, connection
-    /// pooling (32 idle per host), 120 s timeout, and a custom user-agent.
+    /// The internal `reqwest::Client` uses connect + idle-read timeouts (no
+    /// overall deadline) so long SSE / reasoning responses are not killed.
     pub fn new(id: String, base_url: String, bad_status_codes: Arc<[u16]>) -> Self {
-        let client = reqwest::Client::builder()
-            .pool_max_idle_per_host(32)
-            .timeout(Duration::from_secs(120))
-            .user_agent("llm_proxy/2.0")
-            .tcp_nodelay(true)
-            .build()
-            .expect("reqwest::Client::builder should not fail");
-
         Self {
             id,
             base_url,
-            client,
+            client: crate::provider::http::build_http_client(),
             bad_status_codes,
         }
     }

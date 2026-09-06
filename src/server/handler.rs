@@ -371,18 +371,21 @@ pub async fn chat_completions_handler(
                 if attempts > max_retries {
                     tracing::warn!(
                         %pool_id, %key_hash, attempts, max_retries,
+                        status = ?status,
+                        error = %msg,
                         "max retries exceeded"
                     );
                     return Err(AppError::Upstream {
                         status,
                         retryable: false,
                         bad_key_hint: false,
-                        msg: format!("max retries ({max_retries}) exceeded"),
+                        msg: format!("max retries ({max_retries}) exceeded: {msg}"),
                     });
                 }
 
                 tracing::warn!(
                     %pool_id, %key_hash, status = ?status, retryable,
+                    error = %msg,
                     "upstream error, retrying next key"
                 );
 
