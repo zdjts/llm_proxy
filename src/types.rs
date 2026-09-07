@@ -36,7 +36,7 @@ pub struct ChatCompletionRequest {
     pub tool_choice: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream_options: Option<serde_json::Value>,
-    #[serde(flatten, default)]
+    #[serde(flatten, default, skip_serializing_if = "serde_json::Value::is_null")]
     pub extra: serde_json::Value,
 }
 
@@ -249,6 +249,35 @@ mod tests {
         let json = r#"{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"extra_field":"should_not_crash"}"#;
         let req: Result<ChatCompletionRequest, _> = serde_json::from_str(json);
         assert!(req.is_ok());
+    }
+
+    #[test]
+    fn it_omits_null_extra_when_serializing() {
+        let req = ChatCompletionRequest {
+            model: "gpt-4o".into(),
+            messages: vec![Message {
+                role: "user".into(),
+                content: serde_json::Value::String("hi".into()),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+            }],
+            stream: Some(false),
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            stop: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+            user: None,
+            tools: None,
+            tool_choice: None,
+            stream_options: None,
+            extra: serde_json::Value::Null,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert!(json.get("extra").is_none());
+        assert_eq!(json["model"], "gpt-4o");
     }
 
     #[test]

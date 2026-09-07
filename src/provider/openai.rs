@@ -141,21 +141,21 @@ impl Provider for OpenAiProvider {
                 status: Some(status_code),
                 retryable: true,
                 bad_key_hint: false,
-                msg: format!("upstream {status_code}"),
+                msg: crate::provider::http::upstream_error_message(status_code, response).await,
             })
         } else if self.is_bad_status(status_code) {
             Err(AppError::Upstream {
                 status: Some(status_code),
                 retryable: true,
                 bad_key_hint: true,
-                msg: format!("upstream {status_code}"),
+                msg: crate::provider::http::upstream_error_message(status_code, response).await,
             })
         } else {
             Err(AppError::Upstream {
                 status: Some(status_code),
                 retryable: false,
                 bad_key_hint: false,
-                msg: format!("upstream {status_code}"),
+                msg: crate::provider::http::upstream_error_message(status_code, response).await,
             })
         }
     }

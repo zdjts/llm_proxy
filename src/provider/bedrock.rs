@@ -91,22 +91,20 @@ impl Provider for BedrockProvider {
 
         let status = response.status();
         if self.bad_status_codes.contains(&status.as_u16()) {
-            let body_text = response.text().await.unwrap_or_default();
             return Err(AppError::Upstream {
                 status: Some(status.as_u16()),
                 retryable: status.as_u16() == 429,
                 bad_key_hint: true,
-                msg: format!("Bedrock returned {status}: {body_text}"),
+                msg: crate::provider::http::upstream_error_message(status.as_u16(), response).await,
             });
         }
 
         if !status.is_success() {
-            let body_text = response.text().await.unwrap_or_default();
             return Err(AppError::Upstream {
                 status: Some(status.as_u16()),
                 retryable: status.is_server_error(),
                 bad_key_hint: false,
-                msg: format!("Bedrock error: {body_text}"),
+                msg: crate::provider::http::upstream_error_message(status.as_u16(), response).await,
             });
         }
 

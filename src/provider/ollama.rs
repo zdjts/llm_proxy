@@ -70,7 +70,7 @@ impl Provider for OllamaProvider {
                 status: Some(status.as_u16()),
                 retryable: false,
                 bad_key_hint: true,
-                msg: "Ollama key rejected".into(),
+                msg: crate::provider::http::upstream_error_message(status.as_u16(), response).await,
             });
         }
         if !status.is_success() {
@@ -78,7 +78,7 @@ impl Provider for OllamaProvider {
                 status: Some(status.as_u16()),
                 retryable: status.is_server_error(),
                 bad_key_hint: false,
-                msg: "Ollama error".into(),
+                msg: crate::provider::http::upstream_error_message(status.as_u16(), response).await,
             });
         }
 

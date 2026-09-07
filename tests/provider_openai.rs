@@ -272,11 +272,44 @@ async fn it_passes_through_non_bad_4xx() {
             status,
             retryable,
             bad_key_hint,
-            ..
+            msg,
         }) => {
             assert_eq!(status, Some(404));
             assert!(!retryable);
             assert!(!bad_key_hint);
+            assert_eq!(msg, "upstream 404: not found");
+        }
+        other => panic!("expected Upstream error, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn it_forwards_upstream_400_error_message() {
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("POST", "/chat/completions")
+        .with_status(400)
+        .with_body(r#"{"error":{"message":"Invalid schema for function 'shell': schema must be a JSON Schema of 'type: \"object\"'.","type":"invalid_request_error"}}"#)
+        .create_async()
+        .await;
+
+    let provider = test_provider(&server);
+    let result = provider.chat(test_request(), &test_key()).await;
+
+    match result {
+        Err(AppError::Upstream {
+            status,
+            retryable,
+            bad_key_hint,
+            msg,
+        }) => {
+            assert_eq!(status, Some(400));
+            assert!(!retryable);
+            assert!(!bad_key_hint);
+            assert_eq!(
+                msg,
+                "upstream 400: Invalid schema for function 'shell': schema must be a JSON Schema of 'type: \"object\"'."
+            );
         }
         other => panic!("expected Upstream error, got {:?}", other),
     }

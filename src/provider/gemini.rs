@@ -77,7 +77,7 @@ impl Provider for GeminiProvider {
                     status: Some(s),
                     retryable: s >= 500,
                     bad_key_hint: self.is_bad_status(s),
-                    msg: format!("upstream {s}"),
+                    msg: crate::provider::http::upstream_error_message(s, resp).await,
                 });
             }
             let raw_stream = Box::pin(resp.bytes_stream().map(|item| match item {
@@ -141,21 +141,21 @@ impl Provider for GeminiProvider {
                 status: Some(status),
                 retryable: true,
                 bad_key_hint: false,
-                msg: format!("upstream {status}"),
+                msg: crate::provider::http::upstream_error_message(status, response).await,
             })
         } else if self.is_bad_status(status) {
             Err(AppError::Upstream {
                 status: Some(status),
                 retryable: true,
                 bad_key_hint: true,
-                msg: format!("upstream {status}"),
+                msg: crate::provider::http::upstream_error_message(status, response).await,
             })
         } else {
             Err(AppError::Upstream {
                 status: Some(status),
                 retryable: false,
                 bad_key_hint: false,
-                msg: format!("upstream {status}"),
+                msg: crate::provider::http::upstream_error_message(status, response).await,
             })
         }
     }
