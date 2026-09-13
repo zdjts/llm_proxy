@@ -99,21 +99,9 @@ model_to_pool:
 #   prefix: "llm_proxy"
 #   enabled: false
 
-# quota:
-#   enabled: false
-#   daily_tokens: 1000000
-#   monthly_requests: 100000
-
 # rate_limit:
 #   enabled: false
 #   requests_per_minute: 60
-
-# acl:
-#   enabled: false
-#   tenants:
-#     default:
-#       default: deny
-#       models: ["gpt-4o", "deepseek-chat"]
 
 # pricing:
 #   models:
@@ -145,13 +133,6 @@ model_to_pool:
 #     email:
 #       enabled: false
 #       to: ""
-
-# bootstrap_admin:
-#   enabled: false
-#   email: "admin@example.com"
-#   name: "Administrator"
-#   password: "change-me"
-#   role: "owner"
 
 # admin:
 #   enabled: true

@@ -5,8 +5,6 @@
 //! format. Successful requests get an [`AuthedClient`] injected via axum
 //! [`Extension`] for downstream handlers to consume.
 
-pub mod acl;
-
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::Request;

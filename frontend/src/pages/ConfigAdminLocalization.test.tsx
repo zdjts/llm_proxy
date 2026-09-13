@@ -3,11 +3,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { vi } from 'vitest';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { LocaleProvider } from '@/i18n/context';
-import { RoleListPage } from './admin/RoleListPage';
-import { UserListPage } from './admin/UserListPage';
-import { AuditLogPage } from './settings/AuditLogPage';
+import { SystemSettingsPage } from './settings/SystemSettingsPage';
 
-vi.mock('@/lib/api', () => ({ api: { get: vi.fn(() => new Promise(() => undefined)) } }));
+const get = vi.fn();
+vi.mock('@/lib/api', () => ({ api: { get: (...args: unknown[]) => get(...args) } }));
 
 function renderLocale(page: React.ReactNode, locale: 'en' | 'zh-CN') {
   localStorage.setItem('dashboard-locale', locale);
@@ -16,24 +15,28 @@ function renderLocale(page: React.ReactNode, locale: 'en' | 'zh-CN') {
 }
 
 describe('configuration admin localization', () => {
-  beforeEach(() => localStorage.clear());
-
-  it('localizes the built-in role page', () => {
-    renderLocale(<RoleListPage />, 'en');
-    expect(screen.getByRole('heading', { name: 'Roles' })).toBeInTheDocument();
-    expect(screen.getByText('Built-in RBAC roles and their permissions.')).toBeInTheDocument();
+  beforeEach(() => {
+    localStorage.clear();
+    get.mockReset();
+    get.mockResolvedValue({
+      data: {
+        uptime_secs: 1,
+        requests_total: 2,
+        requests_failed: 0,
+        cache_hits: 0,
+        active_connections: 0,
+        retries: 0,
+        key_demotions: 0,
+        upstream_5xx: 0,
+        upstream_4xx: 0,
+        alert_count: 0,
+      },
+    });
   });
 
-  it('localizes admin user and system labels', () => {
-    renderLocale(<UserListPage />, 'en');
-    expect(screen.getByRole('heading', { name: 'Users' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Add user/ })).toBeInTheDocument();
-
-  });
-
-  it('localizes audit availability guidance', () => {
-    renderLocale(<AuditLogPage />, 'zh-CN');
-    expect(screen.getByRole('heading', { name: '审计日志' })).toBeInTheDocument();
-    expect(screen.getByText('审计事件仍可通过管理 API 使用。')).toBeInTheDocument();
+  it('localizes system settings labels', async () => {
+    renderLocale(<SystemSettingsPage />, 'en');
+    expect(await screen.findByRole('heading', { name: 'System' })).toBeInTheDocument();
+    expect(screen.getByText('Gateway status and configuration.')).toBeInTheDocument();
   });
 });

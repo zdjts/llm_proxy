@@ -4,7 +4,6 @@
 
 pub mod admin_api;
 pub mod alerts;
-pub mod auth_api;
 pub mod cost;
 pub mod cost_drilldown;
 pub mod csv;
@@ -15,6 +14,5 @@ pub mod live;
 pub mod queries;
 pub mod replay;
 pub mod requests;
-pub mod stub_api;
 pub mod traffic;
 pub mod ws;

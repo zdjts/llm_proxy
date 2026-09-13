@@ -2,54 +2,10 @@ import axios from 'axios';
 import type {
   CostResponse, RequestsResponse, RequestFilter, KeysResponse,
   TrafficResponse, AlertsResponse, DrilldownResponse, StatusResponse,
-  ClientKeyList, ClientKeyRecord, QuotaSnapshot,
+  ClientKeyList, ClientKeyRecord,
 } from '@/types';
 
 export const api = axios.create({ baseURL: '' });
-
-let isRefreshing = false;
-let failedQueue: Array<{ resolve: (t: string) => void; reject: (e: unknown) => void }> = [];
-
-function processQueue(token: string | null, error: unknown = null) {
-  failedQueue.forEach((p) => { if (token) p.resolve(token); else p.reject(error); });
-  failedQueue = [];
-}
-
-api.interceptors.request.use((config) => {
-  try {
-    const raw = localStorage.getItem('llm-proxy-auth');
-    const token = raw ? JSON.parse(raw)?.state?.accessToken : undefined;
-    if (token) config.headers.Authorization = `Bearer ${token}`;
-  } catch { /* authentication is handled by the server */ }
-  return config;
-});
-
-api.interceptors.response.use((res) => res, async (error) => {
-  const original = error.config;
-  const isAuthRequest = original?.url === '/api/auth/login' || original?.url === '/api/auth/refresh';
-  if (error.response?.status === 401 && original && !original._retry && !isAuthRequest) {
-    if (isRefreshing) {
-      return new Promise((resolve, reject) => failedQueue.push({
-        resolve: (token) => { original.headers.Authorization = `Bearer ${token}`; resolve(api(original)); }, reject,
-      }));
-    }
-    original._retry = true;
-    isRefreshing = true;
-    try {
-      const { useAuthStore } = await import('@/stores/authStore');
-      const token = await useAuthStore.getState().refresh();
-      if (!token) throw error;
-      processQueue(token);
-      original.headers.Authorization = `Bearer ${token}`;
-      return api(original);
-    } catch (refreshError) {
-      processQueue(null, refreshError);
-      try { const { useAuthStore } = await import('@/stores/authStore'); useAuthStore.getState().logout(); } catch { /* ignore */ }
-      return Promise.reject(error);
-    } finally { isRefreshing = false; }
-  }
-  return Promise.reject(error);
-});
 
 function errorMessage(detail: unknown): string | undefined {
   if (typeof detail === 'string') return detail;
@@ -97,7 +53,6 @@ export async function addClientKey(key: string, tenant: string, label: string) {
 export async function updateClientKey(hash: string, updates: { enabled?: boolean; tenant_id?: string; label?: string }) { return (await api.patch<ClientKeyRecord>(`/admin/api/client-keys/${hash}`, updates)).data; }
 export async function deleteClientKey(hash: string) { return (await api.delete<ClientKeyRecord>(`/admin/api/client-keys/${hash}`)).data; }
 export async function rotateClientKey(hash: string, newKey: string) { return (await api.post<ClientKeyRecord>(`/admin/api/client-keys/${hash}`, { new_key: newKey })).data; }
-export async function fetchQuotas() { return (await api.get<QuotaSnapshot[]>('/admin/api/quotas')).data; }
 
 export type ConfigOverview = { version: number; providers: number; pools: number; routing: number; model_registry: number };
 export type ConfigDocumentResponse = { ok: boolean; dry_run: boolean; version: number; message: string };

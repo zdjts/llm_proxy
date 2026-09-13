@@ -897,20 +897,6 @@ pub async fn admin_api_rotate_client_key(
     }
 }
 
-// ── Quota management (Module A2 — v2.0) ───────────────────────────────────
-
-pub async fn admin_api_quotas(
-    State(state): State<crate::server::AppState>,
-) -> Result<Json<Vec<crate::quota::TenantQuotaSnapshot>>, AppError> {
-    match &state.quota_tracker {
-        Some(tracker) => {
-            let snapshots = tracker.usage_snapshot();
-            Ok(Json(snapshots))
-        }
-        None => Err(AppError::Auth("quota tracker not initialized".into())),
-    }
-}
-
 // ── v4.0 Track H: Config-as-Data CRUD (T176) ────────────────────────────
 
 fn config_store(state: &crate::server::AppState) -> Result<&std::sync::Arc<ConfigStore>, AppError> {
@@ -1689,32 +1675,4 @@ pub async fn admin_api_rollback_config(
     Ok(Json(
         serde_json::json!({"ok": true, "rolled_back": audit_id}),
     ))
-}
-
-// ── Budget validation endpoint (AUDIT-15 Fix) ───────────────────────────
-
-#[derive(serde::Deserialize)]
-pub struct ValidateBudgetRequest {
-    pub parent_scope_type: String, // "organization" | "team"
-    pub parent_scope_id: String,
-    pub proposed_child_budget: Option<f64>,
-}
-
-pub async fn admin_api_validate_budget(
-    State(state): State<crate::server::AppState>,
-    Json(req): Json<ValidateBudgetRequest>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let bm = state
-        .budget_manager
-        .as_ref()
-        .ok_or_else(|| AppError::Config("budget manager not initialized".into()))?;
-
-    bm.validate_budget_inheritance(
-        &req.parent_scope_type,
-        &req.parent_scope_id,
-        req.proposed_child_budget,
-    )
-    .await?;
-
-    Ok(Json(serde_json::json!({"ok": true})))
 }

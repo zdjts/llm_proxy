@@ -17,13 +17,12 @@ use serde::{Deserialize, Serialize};
 
 /// Feature-module YAML types, re-exported so `config` is the consistent home.
 pub use crate::auth::ClientKeyEntry;
-pub use crate::auth::acl::AclConfig;
 pub use crate::fallback::FallbackConfig;
 
 /// Root configuration loaded from `config.yaml`.
 ///
 /// YAML-only after boot: `server`, `auth`, `admin`, `rate_limit`, `concurrency`,
-/// `acl`, `fallback_models`, `cache_max_entries`, `failover`/`alerts` (also copied
+/// `fallback_models`, `cache_max_entries`, `failover`/`alerts` (also copied
 /// into [`crate::config_store::RuntimePolicy`]).
 /// Bootstrapped then DB-owned: `pools`, `providers`, `model_to_pool`.
 /// Accounting vs display: `pricing` vs `model_metadata` (do not merge).
@@ -43,8 +42,6 @@ pub struct Config {
     #[serde(default)]
     pub model_metadata: ModelMetadataConfig,
     #[serde(default)]
-    pub bootstrap_admin: BootstrapAdminConfig,
-    #[serde(default)]
     pub admin: AdminConfig,
     #[serde(default)]
     pub pricing: pricing::PricingConfig,
@@ -54,8 +51,6 @@ pub struct Config {
     pub cache_max_entries: usize,
     #[serde(default)]
     pub alerts: AlertConfig,
-    #[serde(default)]
-    pub acl: AclConfig,
     #[serde(default)]
     pub fallback_models: FallbackConfig,
     #[serde(default)]
@@ -484,25 +479,6 @@ impl ModelMetadataConfig {
         }
         out
     }
-}
-
-/// Optional first-admin bootstrap configuration.
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct BootstrapAdminConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub email: String,
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub password: String,
-    #[serde(default = "default_bootstrap_role")]
-    pub role: String,
-}
-
-fn default_bootstrap_role() -> String {
-    "owner".into()
 }
 
 /// Admin dashboard configuration.

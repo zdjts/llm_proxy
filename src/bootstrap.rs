@@ -25,12 +25,10 @@ use crate::db;
 use crate::db_maintenance::{self, DbMaintenanceConfig};
 use crate::health;
 use crate::metrics::Metrics;
-use crate::pipeline::Pipeline;
 use crate::provider::anthropic::AnthropicProvider;
 use crate::provider::gemini::GeminiProvider;
 use crate::provider::openai::OpenAiProvider;
 use crate::provider::registry::ProviderRegistry;
-use crate::quota::{QuotaConfig, QuotaTracker};
 use crate::ratelimit::RateLimiter;
 use crate::router::{BadKeyRegistry, RouterHandle};
 use crate::runtime;
@@ -71,11 +69,6 @@ pub async fn bootstrap(config_path: &str) -> anyhow::Result<BootedApp> {
 
     let bad_status_codes: Arc<[u16]> =
         Arc::from(config.failover.bad_status_codes.clone().into_boxed_slice());
-
-    if let Err(e) = crate::rbac::store::seed_builtin_roles(&pool).await {
-        tracing::warn!(error = %e, "Failed to seed built-in RBAC roles — continuing");
-    }
-    crate::rbac::store::bootstrap_admin(&pool, &config.bootstrap_admin).await?;
 
     // ConfigStore is the runtime source for pools/providers/routing (ADR-017).
     let config_store = Arc::new(ConfigStore::load(pool.clone()).await?);
@@ -276,32 +269,6 @@ pub async fn bootstrap(config_path: &str) -> anyhow::Result<BootedApp> {
 
     let auth_store = Arc::new(AuthStore::new(config.auth.client_keys.clone()));
 
-    let quota_tracker = QuotaConfig {
-        enabled: false,
-        daily_tokens: None,
-        monthly_requests: None,
-    };
-    let quota_tracker = Some(Arc::new(QuotaTracker::new(quota_tracker, alert_tx.clone())));
-
-    let pipeline = Some(Arc::new(Pipeline::from_config(
-        &crate::pipeline::PipelineConfig::default(),
-    )));
-
-    let jwt_secret = std::env::var("LLM_PROXY_JWT_SECRET")
-        .unwrap_or_else(|_| "llm-proxy-default-jwt-secret-change-me".to_string());
-    let jwt_service = Arc::new(crate::rbac::session::JwtService::new(jwt_secret.as_bytes()));
-    let rbac_state = crate::rbac::middleware::RbacState {
-        pool: pool.clone(),
-        jwt: jwt_service,
-        compat_mode: std::env::var("LLM_PROXY_RBAC_NO_COMPAT").is_err(),
-    };
-    if rbac_state.compat_mode {
-        tracing::warn!(
-            "RBAC running in compat mode — all unauthenticated requests get full Owner access. \
-             Set LLM_PROXY_RBAC_NO_COMPAT=1 to enforce JWT authentication."
-        );
-    }
-
     let app_state = AppState {
         router: router_handle.clone(),
         catalog: crate::model_catalog::ModelCatalog::new(
@@ -312,7 +279,6 @@ pub async fn bootstrap(config_path: &str) -> anyhow::Result<BootedApp> {
         config: Arc::clone(&config),
         config_store: Arc::clone(&config_store),
         credentials: Arc::clone(&credentials),
-        budget_manager: Some(Arc::new(crate::budget::BudgetManager::new(pool.clone()))),
         cache: PromptCache::new(config.cache_max_entries),
         metrics: Arc::clone(&metrics),
         circuit_breaker: Arc::clone(&circuit_breaker),
@@ -322,9 +288,6 @@ pub async fn bootstrap(config_path: &str) -> anyhow::Result<BootedApp> {
         error_burst_counters: Arc::new(dashmap::DashMap::new()),
         alert_snapshot: alert_snapshot.clone(),
         auth_store: Some(Arc::clone(&auth_store)),
-        quota_tracker,
-        pipeline,
-        rbac_state: Some(rbac_state),
     };
 
     let auth_state = auth::AuthState {

@@ -75,12 +75,8 @@ models:
         error_burst_counters: Arc::new(dashmap::DashMap::new()),
         alert_snapshot: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
         auth_store: None,
-        quota_tracker: None,
-        pipeline: None,
-        rbac_state: None,
         config_store,
         credentials: std::sync::Arc::new(llm_proxy::credential::CredentialRuntime::new(None)),
-        budget_manager: None,
     }
 }
 

@@ -63,15 +63,11 @@ async fn cost_page_contains_stat_cards() {
         fallback_config: std::sync::Arc::new(llm_proxy::fallback::FallbackConfig::default()),
         metrics: std::sync::Arc::new(llm_proxy::metrics::Metrics::default()),
         auth_store: None,
-        pipeline: None,
-        rbac_state: None,
-        quota_tracker: None,
         config_store: Arc::new(llm_proxy::config_store::ConfigStore::for_test(
             pool.clone(),
             config.model_metadata.clone(),
         )),
         credentials: Arc::new(llm_proxy::credential::CredentialRuntime::new(None)),
-        budget_manager: None,
     };
     let app = Router::new()
         .route(
@@ -159,15 +155,11 @@ async fn help_page_serves_runbook() {
         fallback_config: std::sync::Arc::new(llm_proxy::fallback::FallbackConfig::default()),
         metrics: std::sync::Arc::new(llm_proxy::metrics::Metrics::default()),
         auth_store: None,
-        pipeline: None,
-        rbac_state: None,
-        quota_tracker: None,
         config_store: Arc::new(llm_proxy::config_store::ConfigStore::for_test(
             db.clone(),
             config.model_metadata.clone(),
         )),
         credentials: Arc::new(llm_proxy::credential::CredentialRuntime::new(None)),
-        budget_manager: None,
     };
     let app = Router::new()
         .route("/admin/help", get(llm_proxy::dashboard::help::help_handler))

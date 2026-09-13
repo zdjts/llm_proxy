@@ -4,9 +4,8 @@
 //! requests across multiple upstream key pools with weighted-random
 //! selection, background health probing, and per-request SQLite logging.
 //!
-//! v2.0 adds dynamic key management, per-tenant quotas, provider plugin
-//! architecture, transform pipelines, multi-strategy routing, multi-level
-//! caching, and live request dashboard.
+//! v2.0 adds dynamic key management, provider plugin
+//! architecture, multi-strategy routing, caching, and a live request dashboard.
 
 pub mod aggregator;
 pub mod alerts;
@@ -15,7 +14,6 @@ pub mod audit_trail;
 pub mod auth;
 pub mod auth_store;
 pub mod bootstrap;
-pub mod budget;
 pub mod cache;
 pub mod chat_service;
 pub mod circuit_breaker;
@@ -33,16 +31,11 @@ pub mod health_check;
 pub mod metrics;
 pub mod model_catalog;
 pub mod model_import;
-pub mod pipeline;
 pub mod provider;
-pub mod quota;
 pub mod ratelimit;
-pub mod rbac;
-pub mod response_validate;
 pub mod router;
 pub mod router_strategy;
 pub mod runtime;
 pub mod server;
 pub mod sse_relay;
-pub mod token_counter;
 pub mod types;

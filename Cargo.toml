@@ -25,7 +25,6 @@ bytes = "1"
 sha2 = "0.10"
 hmac = "0.12"
 hex = "0.4"
-argon2 = "0.5"
 tower-http = { version = "0.6", features = ["limit", "cors", "fs"] }
 clap = { version = "4", features = ["derive"], optional = true }
 

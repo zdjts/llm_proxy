@@ -169,14 +169,6 @@ export interface ClientKeyList {
   total: number;
 }
 
-export interface QuotaSnapshot {
-  tenant_id: string;
-  daily_tokens_used: number;
-  daily_tokens_limit: number | null;
-  monthly_requests_used: number;
-  monthly_requests_limit: number | null;
-}
-
 export interface LiveRequestEvent {
   event_type: string;
   request_id: string;

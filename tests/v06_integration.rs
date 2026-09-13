@@ -121,15 +121,11 @@ async fn cost_csv_endpoint_returns_200() {
         concurrency: Arc::new(llm_proxy::concurrency::ConcurrencyLimiter::new(50, 500)),
         fallback_config: Arc::new(llm_proxy::fallback::FallbackConfig::default()),
         auth_store: None,
-        pipeline: None,
-        rbac_state: None,
-        quota_tracker: None,
         config_store: Arc::new(llm_proxy::config_store::ConfigStore::for_test(
             pool.clone(),
             config.model_metadata.clone(),
         )),
         credentials: Arc::new(llm_proxy::credential::CredentialRuntime::new(None)),
-        budget_manager: None,
     };
 
     let app = Router::new()

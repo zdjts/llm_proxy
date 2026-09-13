@@ -1,34 +1,31 @@
 import { useEffect, useRef } from 'react';
 import { NavLink } from 'react-router-dom';
-import { Activity, BarChart3, Bell, Boxes, DollarSign, Gauge, HelpCircle, Key, Languages, LayoutDashboard, Server, Settings, Shield, ShieldCheck, Users, Wallet, X } from 'lucide-react';
+import { Activity, BarChart3, Bell, Boxes, DollarSign, HelpCircle, Key, Languages, LayoutDashboard, Server, Settings, Users, X } from 'lucide-react';
 import { useLocale } from '@/i18n/context';
-import { useAuthStore } from '@/stores/authStore';
 import type { Locale, Messages } from '@/i18n/types';
 
 interface Props { mobileOpen: boolean; onMobileClose: () => void; }
-interface NavItem { to: string; label: string; icon: React.ComponentType<{ size?: number; className?: string }>; permission?: string; section?: string; }
+interface NavItem { to: string; label: string; icon: React.ComponentType<{ size?: number; className?: string }>; section?: string; }
 
 const allNavItems: NavItem[] = [
   { to: '/console', label: 'overview', icon: LayoutDashboard, section: 'main' }, { to: '/live', label: 'live monitor', icon: Activity, section: 'main' },
-  { to: '/config', label: 'config console', icon: Settings, permission: 'audit.view', section: 'config' }, { to: '/config/providers', label: 'providers', icon: Server, permission: 'providers.manage', section: 'config' }, { to: '/config/pools', label: 'key pools', icon: Key, permission: 'keys.manage', section: 'config' }, { to: '/config/routing', label: 'routing', icon: Boxes, permission: 'routing.edit', section: 'config' }, { to: '/config/models', label: 'model catalog', icon: Boxes, permission: 'providers.manage', section: 'config' },
-  { to: '/budgets', label: 'budgets', icon: Wallet, permission: 'billing.view', section: 'admin' }, { to: '/admin/users', label: 'users', icon: Users, permission: 'team.manage', section: 'admin' }, { to: '/admin/roles', label: 'roles', icon: Shield, permission: 'team.manage', section: 'admin' }, { to: '/client-keys', label: 'client keys', icon: Users, section: 'admin' },
-  { to: '/cost', label: 'cost', icon: DollarSign, section: 'monitor' }, { to: '/cost/drilldown', label: 'drilldown', icon: BarChart3, section: 'monitor' }, { to: '/requests', label: 'requests', icon: Activity, section: 'monitor' }, { to: '/keys', label: 'key health', icon: Key, section: 'monitor' }, { to: '/traffic', label: 'traffic', icon: BarChart3, section: 'monitor' }, { to: '/alerts', label: 'alerts', icon: Bell, section: 'monitor' }, { to: '/quotas', label: 'quotas', icon: Gauge, section: 'monitor' },
-  { to: '/settings/audit', label: 'audit log', icon: ShieldCheck, permission: 'audit.view', section: 'settings' }, { to: '/settings/system', label: 'system', icon: Settings, permission: 'providers.manage', section: 'settings' }, { to: '/help', label: 'help', icon: HelpCircle, section: 'main' },
+  { to: '/config', label: 'config console', icon: Settings, section: 'config' }, { to: '/config/providers', label: 'providers', icon: Server, section: 'config' }, { to: '/config/pools', label: 'key pools', icon: Key, section: 'config' }, { to: '/config/routing', label: 'routing', icon: Boxes, section: 'config' }, { to: '/config/models', label: 'model catalog', icon: Boxes, section: 'config' },
+  { to: '/client-keys', label: 'client keys', icon: Users, section: 'admin' },
+  { to: '/cost', label: 'cost', icon: DollarSign, section: 'monitor' }, { to: '/cost/drilldown', label: 'drilldown', icon: BarChart3, section: 'monitor' }, { to: '/requests', label: 'requests', icon: Activity, section: 'monitor' }, { to: '/keys', label: 'key health', icon: Key, section: 'monitor' }, { to: '/traffic', label: 'traffic', icon: BarChart3, section: 'monitor' }, { to: '/alerts', label: 'alerts', icon: Bell, section: 'monitor' },
+  { to: '/settings/system', label: 'system', icon: Settings, section: 'settings' }, { to: '/help', label: 'help', icon: HelpCircle, section: 'main' },
 ];
 const sectionLabels: Record<string, keyof Messages['sidebar']['sections']> = { main: 'main', config: 'config', monitor: 'monitor', admin: 'admin', settings: 'settings' };
-const itemLabels: Record<string, Exclude<keyof Messages['sidebar'], 'sections'>> = { overview: 'overview', 'live monitor': 'live', providers: 'providers', 'key pools': 'keyPools', routing: 'routing', 'model catalog': 'modelCatalog', budgets: 'budgets', users: 'users', roles: 'roles', 'client keys': 'clientKeys', cost: 'cost', drilldown: 'drilldown', requests: 'requests', 'key health': 'keys', traffic: 'traffic', alerts: 'alerts', quotas: 'quotas', 'audit log': 'auditLog', system: 'system', help: 'help', 'config console': 'configConsole' };
+const itemLabels: Record<string, Exclude<keyof Messages['sidebar'], 'sections'>> = { overview: 'overview', 'live monitor': 'live', providers: 'providers', 'key pools': 'keyPools', routing: 'routing', 'model catalog': 'modelCatalog', 'client keys': 'clientKeys', cost: 'cost', drilldown: 'drilldown', requests: 'requests', 'key health': 'keys', traffic: 'traffic', alerts: 'alerts', system: 'system', help: 'help', 'config console': 'configConsole' };
 const focusableSelector = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 export function Sidebar({ mobileOpen, onMobileClose }: Props) {
   const { locale, t, setLocale } = useLocale();
-  const { can } = useAuthStore();
   const drawerRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
-  const visibleItems = allNavItems.filter((item) => !item.permission || can(item.permission));
   const sections = new Map<string, NavItem[]>();
   const nextLocale: Locale = locale === 'en' ? 'zh-CN' : 'en';
 
-  for (const item of visibleItems) {
+  for (const item of allNavItems) {
     const section = item.section || 'main';
     sections.set(section, [...(sections.get(section) || []), item]);
   }

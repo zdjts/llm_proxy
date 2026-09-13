@@ -1,6 +1,6 @@
 //! CLI management tool for llm_proxy (v2.0).
 //!
-//! Extended with client-key CRUD, quota management, and live stream command.
+//! Extended with client-key CRUD, OAuth login, and live stream command.
 
 #[cfg(feature = "cli")]
 mod cli_impl {
@@ -73,8 +73,6 @@ Gateway URL is inferred from config.yaml (server.host:port) unless you pass --ba
             #[command(subcommand)]
             action: ClientKeyAction,
         },
-        /// Show per-tenant token and request quota usage.
-        Quotas,
         /// Print the live waterfall dashboard URL (open in a browser).
         Live,
         /// Export recent request logs from the gateway.
@@ -246,15 +244,6 @@ Gateway URL is inferred from config.yaml (server.host:port) unless you pass --ba
     struct ClientKeyList {
         keys: Vec<ClientKeyRecord>,
         total: usize,
-    }
-
-    #[derive(Deserialize)]
-    struct QuotaSnapshot {
-        tenant_id: String,
-        daily_tokens_used: u64,
-        daily_tokens_limit: Option<u64>,
-        monthly_requests_used: u64,
-        monthly_requests_limit: Option<u64>,
     }
 
     fn redact_url(url: &str) -> String {
@@ -509,29 +498,6 @@ Gateway URL is inferred from config.yaml (server.host:port) unless you pass --ba
                     println!("Deleted key: hash={}", k.key_hash);
                 }
             },
-
-            Commands::Quotas => {
-                let url = format!("{}/admin/api/quotas", cli.base_url);
-                let body = do_get(&url)?;
-                let quotas: Vec<QuotaSnapshot> =
-                    serde_json::from_str(&body).map_err(|e| format!("parse: {e}"))?;
-                println!("Tenant Quotas");
-                println!("─────────────");
-                for q in &quotas {
-                    println!("Tenant: {}", q.tenant_id);
-                    println!(
-                        "  Daily tokens:   {} / {:?}",
-                        format_num(q.daily_tokens_used),
-                        q.daily_tokens_limit.map(format_num),
-                    );
-                    println!(
-                        "  Monthly reqs:   {} / {:?}",
-                        format_num(q.monthly_requests_used),
-                        q.monthly_requests_limit.map(format_num),
-                    );
-                    println!();
-                }
-            }
 
             Commands::Live => {
                 println!("Connect to:  {}/admin/live", cli.base_url);
@@ -1092,25 +1058,6 @@ Gateway URL is inferred from config.yaml (server.host:port) unless you pass --ba
             let r: ClientKeyList = serde_json::from_str(json).unwrap();
             assert_eq!(r.total, 2);
             assert_eq!(r.keys.len(), 2);
-        }
-
-        #[test]
-        fn it_deserializes_quota_snapshot() {
-            let json = r#"{"tenant_id":"tenant-1","daily_tokens_used":50000,"daily_tokens_limit":100000,"monthly_requests_used":1000,"monthly_requests_limit":5000}"#;
-            let q: QuotaSnapshot = serde_json::from_str(json).unwrap();
-            assert_eq!(q.tenant_id, "tenant-1");
-            assert_eq!(q.daily_tokens_used, 50000);
-            assert_eq!(q.daily_tokens_limit, Some(100000));
-            assert_eq!(q.monthly_requests_used, 1000);
-            assert_eq!(q.monthly_requests_limit, Some(5000));
-        }
-
-        #[test]
-        fn it_deserializes_quota_without_limits() {
-            let json = r#"{"tenant_id":"unlimited","daily_tokens_used":0,"daily_tokens_limit":null,"monthly_requests_used":0,"monthly_requests_limit":null}"#;
-            let q: QuotaSnapshot = serde_json::from_str(json).unwrap();
-            assert_eq!(q.daily_tokens_limit, None);
-            assert_eq!(q.monthly_requests_limit, None);
         }
 
         // ── HTTP helper tests (mockito) ─────────────────────────────────

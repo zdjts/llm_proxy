@@ -44,7 +44,6 @@ pub(crate) struct StreamContext {
     pub user_agent: Option<String>,
     pub client_ip: Option<String>,
     pricing: Arc<crate::config::pricing::PricingConfig>,
-    pub budget_manager: Option<std::sync::Arc<crate::budget::BudgetManager>>,
 }
 
 pub async fn chat_completions_handler(
@@ -88,25 +87,6 @@ pub async fn chat_completions_handler(
                 retryable: true,
                 bad_key_hint: false,
                 msg: "tenant concurrency limit reached".into(),
-            });
-        }
-    };
-
-    // ── v4.0 Track I (AUDIT-13 Fix): budget pre-check ──
-    if let Some(ref bm) = state.budget_manager {
-        let pricing = state.config_store.pricing().await;
-        let cost_est = estimate_cost(&pricing, &model, &tenant_id);
-        let check = bm.check_budget(&tenant_id, cost_est).await?;
-        if !check.allowed {
-            state.metrics.inc_failed();
-            return Err(AppError::Upstream {
-                status: Some(429),
-                retryable: false,
-                bad_key_hint: false,
-                msg: format!(
-                    "budget exceeded: {}",
-                    check.denied_by.as_deref().unwrap_or("unknown")
-                ),
             });
         }
     };
@@ -296,11 +276,6 @@ pub async fn chat_completions_handler(
                         };
                         let _ = db::log_request(&state.db, &log).await;
 
-                        // ── v4.0 AUDIT-13 Fix: record spend ──
-                        if let (Some(bm), Some(cost)) = (&state.budget_manager, cost) {
-                            let _ = bm.record_spend(&tenant_id, cost).await;
-                        }
-
                         if latency_ms > runtime_policy.alerts.min_latency_ms as i64 {
                             let _ = state.alert_tx.send(AlertEvent::LatencySpike {
                                 ts,
@@ -335,7 +310,6 @@ pub async fn chat_completions_handler(
                                 user_agent: user_agent.clone(),
                                 client_ip: client_ip.clone(),
                                 pricing: state.config_store.pricing().await,
-                                budget_manager: state.budget_manager.clone(),
                             },
                             body,
                         );
@@ -459,7 +433,6 @@ pub(crate) fn build_stream_response(
     let inspector_user_agent = ctx.user_agent.clone();
     let inspector_client_ip = ctx.client_ip.clone();
     let inspector_pricing = ctx.pricing.clone();
-    let inspector_budget = ctx.budget_manager.clone();
 
     tokio::spawn(async move {
         let mut inspector = StreamInspector::new();
@@ -535,11 +508,6 @@ pub(crate) fn build_stream_response(
             tracing::error!(error = %e, "failed to write stream log to db");
         }
 
-        // ── v4.0 AUDIT-13 Fix: record spend for streaming requests ──
-        if let (Some(bm), Some(cost)) = (&inspector_budget, log.cost_usd) {
-            let _ = bm.record_spend(&log.audit.from_auth.tenant_id, cost).await;
-        }
-
         if inspector_lat > inspector_min_latency_ms as i64 {
             let _ = inspector_alert_tx.send(AlertEvent::LatencySpike {
                 ts: inspector_ts,
@@ -581,18 +549,4 @@ pub(crate) fn compute_cost(
     let prompt_cost = usage.prompt_tokens as f64 * price.prompt / 1_000_000.0;
     let completion_cost = usage.completion_tokens as f64 * price.completion / 1_000_000.0;
     Some(prompt_cost + completion_cost)
-}
-
-/// Conservative cost estimate for budget pre-check (before actual usage is known).
-/// Uses pricing table and a default 1000-token estimate.
-pub(crate) fn estimate_cost(
-    pricing: &crate::config::pricing::PricingConfig,
-    model: &str,
-    tenant: &str,
-) -> f64 {
-    let accounting = pricing.accounting();
-    let price = accounting.lookup(model, Some(tenant));
-    let prompt_est = 1000.0 * price.prompt / 1_000_000.0;
-    let completion_est = 1000.0 * price.completion / 1_000_000.0;
-    prompt_est + completion_est
 }

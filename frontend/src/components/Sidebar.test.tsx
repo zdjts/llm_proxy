@@ -2,7 +2,6 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { LocaleProvider } from '@/i18n/context';
-import { useAuthStore } from '@/stores/authStore';
 import { Sidebar } from './Sidebar';
 
 function renderSidebar(mobileOpen = true, onMobileClose = () => undefined) {
@@ -12,13 +11,12 @@ function renderSidebar(mobileOpen = true, onMobileClose = () => undefined) {
 describe('Sidebar', () => {
   beforeEach(() => {
     localStorage.setItem('dashboard-locale', 'en');
-    useAuthStore.getState().setTokens('access', 'refresh', { id: 'user-1', email: 'operator@example.test', name: 'Operator', roles: ['operator'], permissions: [], teams: [], avatar_url: null });
   });
 
-  it('keeps public routes visible while filtering restricted routes', () => {
+  it('keeps console routes visible', () => {
     renderSidebar();
     expect(screen.getAllByRole('link', { name: 'Overview' }).length).toBeGreaterThan(0);
-    expect(screen.queryByRole('link', { name: 'Providers' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: 'Providers' }).length).toBeGreaterThan(0);
     expect(screen.queryByRole('link', { name: 'Users' })).not.toBeInTheDocument();
   });
 
