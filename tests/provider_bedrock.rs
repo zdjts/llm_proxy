@@ -23,10 +23,7 @@ fn test_provider(server: &ServerGuard) -> BedrockProvider {
 }
 
 fn test_key() -> KeyEntry {
-    KeyEntry {
-        key: "sk-bedrock-test".into(),
-        weight: 1,
-    }
+    KeyEntry::api_key("sk-bedrock-test", 1)
 }
 
 fn test_request() -> llm_proxy::types::ChatCompletionRequest {

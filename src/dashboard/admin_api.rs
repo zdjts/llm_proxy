@@ -133,6 +133,18 @@ struct ExportPool {
 struct ExportKey {
     key: String,
     weight: u32,
+    #[serde(rename = "type", skip_serializing_if = "is_api_key_type")]
+    cred_type: crate::config::CredentialType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refresh: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    issuer: Option<String>,
+}
+
+fn is_api_key_type(t: &crate::config::CredentialType) -> bool {
+    *t == crate::config::CredentialType::ApiKey
 }
 
 #[derive(Serialize)]
@@ -215,6 +227,10 @@ pub async fn admin_api_config_export(
                         .map(|key| ExportKey {
                             key: key.key.clone(),
                             weight: key.weight,
+                            cred_type: key.cred_type,
+                            refresh: key.refresh.clone(),
+                            expires: key.expires,
+                            issuer: key.issuer.clone(),
                         })
                         .collect(),
                 },
@@ -1135,8 +1151,10 @@ pub async fn admin_api_list_pools(
                 "strategy": format!("{:?}", cfg.strategy).to_lowercase(),
                 "key_count": cfg.keys.len(),
                 "keys": cfg.keys.iter().map(|k| serde_json::json!({
-                    "key_hash": crate::db::compute_key_hash(&k.key),
+                    "key_hash": k.identity_hash(),
                     "weight": k.weight,
+                    "type": k.cred_type_str(),
+                    "issuer": k.issuer,
                 })).collect::<Vec<_>>(),
             })
         })
@@ -1159,9 +1177,32 @@ fn default_strategy() -> String {
 
 #[derive(serde::Deserialize, Serialize)]
 pub struct CreateKeyEntryRequest {
+    #[serde(default)]
     pub key: String,
     #[serde(default = "default_weight")]
     pub weight: u32,
+    #[serde(default, rename = "type")]
+    pub cred_type: crate::config::CredentialType,
+    #[serde(default)]
+    pub refresh: Option<String>,
+    #[serde(default)]
+    pub expires: Option<i64>,
+    #[serde(default)]
+    pub issuer: Option<String>,
+}
+
+impl CreateKeyEntryRequest {
+    fn to_key_entry(&self) -> crate::config::KeyEntry {
+        crate::config::KeyEntry {
+            key: self.key.clone(),
+            weight: self.weight,
+            cred_type: self.cred_type,
+            refresh: self.refresh.clone(),
+            expires: self.expires,
+            issuer: self.issuer.clone(),
+            identity: None,
+        }
+    }
 }
 
 fn default_weight() -> u32 {
@@ -1185,22 +1226,28 @@ pub async fn admin_api_create_pool(
         .await
         .map_err(|e| AppError::BadRequest(format!("create pool: {e}")))?;
     for ke in &req.keys {
-        if ke.key.is_empty() || ke.weight == 0 {
+        let entry = ke.to_key_entry();
+        if entry.weight == 0 {
+            return Err(AppError::BadRequest(
+                "pool keys must have positive weight".into(),
+            ));
+        }
+        if entry.is_oauth() {
+            if entry.refresh.as_deref().filter(|s| !s.is_empty()).is_none()
+                || entry.issuer.as_deref().filter(|s| !s.is_empty()).is_none()
+            {
+                return Err(AppError::BadRequest(
+                    "oauth pool keys require refresh and issuer".into(),
+                ));
+            }
+        } else if entry.key.is_empty() {
             return Err(AppError::BadRequest(
                 "pool keys must be non-empty with positive weight".into(),
             ));
         }
-        let kh = crate::db::compute_key_hash(&ke.key);
-        sqlx::query(
-            "INSERT INTO key_entry (pool_id, key_hash, key_plain, weight) VALUES (?1, ?2, ?3, ?4)",
-        )
-        .bind(&req.id)
-        .bind(&kh)
-        .bind(&ke.key)
-        .bind(ke.weight as i64)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| AppError::BadRequest(format!("create pool key: {e}")))?;
+        crate::config_store::insert_key_entry(tx.as_mut(), &req.id, &entry)
+            .await
+            .map_err(|e| AppError::BadRequest(e.to_string()))?;
     }
     tx.commit()
         .await
@@ -1209,7 +1256,7 @@ pub async fn admin_api_create_pool(
         "id": req.id,
         "strategy": req.strategy,
         "keys": req.keys.iter().map(|k| serde_json::json!({
-            "key_hash": crate::db::compute_key_hash(&k.key),
+            "key_hash": k.to_key_entry().identity_hash(),
             "weight": k.weight,
         })).collect::<Vec<_>>(),
     });
@@ -1229,6 +1276,57 @@ pub async fn admin_api_create_pool(
     .await;
     store.refresh_from_db().await?;
     Ok(Json(serde_json::json!({"ok": true, "id": req.id})))
+}
+
+pub async fn admin_api_add_pool_key(
+    State(state): State<crate::server::AppState>,
+    Path(pool_id): Path<String>,
+    Json(req): Json<CreateKeyEntryRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let store = config_store(&state)?;
+    let entry = req.to_key_entry();
+    if entry.weight == 0 {
+        return Err(AppError::BadRequest(
+            "pool keys must have positive weight".into(),
+        ));
+    }
+    if entry.is_oauth() {
+        if entry.refresh.as_deref().filter(|s| !s.is_empty()).is_none()
+            || entry.issuer.as_deref().filter(|s| !s.is_empty()).is_none()
+        {
+            return Err(AppError::BadRequest(
+                "oauth pool keys require refresh and issuer".into(),
+            ));
+        }
+    } else if entry.key.is_empty() {
+        return Err(AppError::BadRequest("pool key must be non-empty".into()));
+    }
+    let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM key_pool WHERE id = ?1")
+        .bind(&pool_id)
+        .fetch_optional(store.db())
+        .await
+        .map_err(|e| AppError::Internal(format!("lookup pool: {e}")))?;
+    if exists.is_none() {
+        return Err(AppError::NotFound(format!("pool '{pool_id}' not found")));
+    }
+    let mut tx = store
+        .db()
+        .begin()
+        .await
+        .map_err(|e| AppError::Internal(format!("begin add key: {e}")))?;
+    crate::config_store::insert_key_entry(tx.as_mut(), &pool_id, &entry)
+        .await
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("commit add key: {e}")))?;
+    store.refresh_from_db().await?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "pool_id": pool_id,
+        "key_hash": entry.identity_hash(),
+        "type": entry.cred_type_str(),
+    })))
 }
 
 pub async fn admin_api_delete_pool(

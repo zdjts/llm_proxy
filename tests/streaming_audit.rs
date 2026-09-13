@@ -30,10 +30,7 @@ fn stream_req() -> ChatCompletionRequest {
 }
 
 fn test_key() -> KeyEntry {
-    KeyEntry {
-        key: "sk-test".into(),
-        weight: 1,
-    }
+    KeyEntry::api_key("sk-test", 1)
 }
 
 #[tokio::test]

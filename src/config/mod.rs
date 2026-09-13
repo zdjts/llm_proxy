@@ -13,7 +13,7 @@ pub mod pricing;
 use std::collections::HashMap;
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Feature-module YAML types, re-exported so `config` is the consistent home.
 pub use crate::auth::ClientKeyEntry;
@@ -173,14 +173,101 @@ pub struct PoolConfig {
     pub strategy: PoolStrategy,
 }
 
-/// An upstream API key entry with its routing weight.
+/// Kind of upstream credential stored in a [`KeyEntry`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialType {
+    #[default]
+    ApiKey,
+    Oauth,
+}
+
+/// An upstream API key or OAuth credential with its routing weight.
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct KeyEntry {
-    /// The upstream API key (plaintext, stored only in config).
+    /// Current Bearer token (API key, or OAuth access token).
+    #[serde(default)]
     pub key: String,
     /// Weight for weighted-random selection. Defaults to 0 (never selected unless all zero).
     #[serde(default)]
     pub weight: u32,
+    /// `api_key` (default) or `oauth`.
+    #[serde(default, rename = "type")]
+    pub cred_type: CredentialType,
+    /// OAuth refresh token. Identity hash is derived from this when present.
+    #[serde(default)]
+    pub refresh: Option<String>,
+    /// Access-token expiry in unix milliseconds (already skewed).
+    #[serde(default)]
+    pub expires: Option<i64>,
+    /// OAuth issuer, e.g. `xai`.
+    #[serde(default)]
+    pub issuer: Option<String>,
+    /// Stable identity hash loaded from DB. Not serialized.
+    #[serde(skip)]
+    pub identity: Option<String>,
+}
+
+impl KeyEntry {
+    pub fn api_key(key: impl AsRef<str>, weight: u32) -> Self {
+        Self {
+            key: key.as_ref().to_owned(),
+            weight,
+            cred_type: CredentialType::ApiKey,
+            refresh: None,
+            expires: None,
+            issuer: None,
+            identity: None,
+        }
+    }
+
+    pub fn oauth(
+        access: impl AsRef<str>,
+        refresh: impl AsRef<str>,
+        issuer: impl AsRef<str>,
+        weight: u32,
+        expires: Option<i64>,
+    ) -> Self {
+        Self {
+            key: access.as_ref().to_owned(),
+            weight,
+            cred_type: CredentialType::Oauth,
+            refresh: Some(refresh.as_ref().to_owned()),
+            expires,
+            issuer: Some(issuer.as_ref().to_owned()),
+            identity: None,
+        }
+    }
+
+    pub fn is_oauth(&self) -> bool {
+        self.cred_type == CredentialType::Oauth
+    }
+
+    pub fn cred_type_str(&self) -> &'static str {
+        match self.cred_type {
+            CredentialType::ApiKey => "api_key",
+            CredentialType::Oauth => "oauth",
+        }
+    }
+
+    fn identity_secret(&self) -> &str {
+        if self.is_oauth() {
+            self.refresh
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&self.key)
+        } else {
+            &self.key
+        }
+    }
+
+    /// Stable hash used for bad-key tracking, health, and DB identity.
+    pub fn identity_hash(&self) -> String {
+        if let Some(id) = self.identity.as_deref().filter(|s| !s.is_empty()) {
+            return id.to_owned();
+        }
+        crate::db::compute_key_hash(self.identity_secret())
+    }
 }
 
 /// Upstream provider definition.
@@ -560,7 +647,18 @@ impl Config {
         }
         for (pool_id, pool) in &self.pools {
             for (i, key) in pool.keys.iter().enumerate() {
-                if key.key.is_empty() {
+                if key.is_oauth() {
+                    if key.refresh.as_deref().filter(|s| !s.is_empty()).is_none() {
+                        return Err(crate::error::AppError::Config(format!(
+                            "Pool '{pool_id}' key {i} oauth credential is missing refresh",
+                        )));
+                    }
+                    if key.issuer.as_deref().filter(|s| !s.is_empty()).is_none() {
+                        return Err(crate::error::AppError::Config(format!(
+                            "Pool '{pool_id}' key {i} oauth credential is missing issuer",
+                        )));
+                    }
+                } else if key.key.is_empty() {
                     return Err(crate::error::AppError::Config(format!(
                         "Pool '{pool_id}' key {i} has empty key",
                     )));
@@ -814,6 +912,89 @@ model_to_pool:
         let config: Config = serde_yaml::from_str(yaml).unwrap();
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("empty key"));
+    }
+
+    #[test]
+    fn it_parses_oauth_key_entry() {
+        let yaml = r#"
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+auth:
+  client_keys:
+    - { key: "sk-test" }
+
+db:
+  path: "./test.db"
+
+failover:
+  enabled: true
+
+pools:
+  grok_pool:
+    keys:
+      - type: oauth
+        issuer: xai
+        key: access-token
+        refresh: refresh-token
+        expires: 1700000000000
+        weight: 1
+
+providers:
+  - id: xai
+    pool_id: grok_pool
+    base_url: "https://api.x.ai/v1"
+
+model_to_pool:
+  "grok-4.6": grok_pool
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        config.validate().unwrap();
+        let key = &config.pools["grok_pool"].keys[0];
+        assert!(key.is_oauth());
+        assert_eq!(key.issuer.as_deref(), Some("xai"));
+        assert_eq!(key.refresh.as_deref(), Some("refresh-token"));
+        assert_eq!(key.key, "access-token");
+        assert_eq!(
+            key.identity_hash(),
+            crate::db::compute_key_hash("refresh-token")
+        );
+    }
+
+    #[test]
+    fn it_rejects_oauth_without_refresh() {
+        let yaml = r#"
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+auth:
+  client_keys:
+    - { key: "sk-test" }
+
+db:
+  path: "./test.db"
+
+failover:
+  enabled: true
+
+pools:
+  grok_pool:
+    keys:
+      - { type: oauth, issuer: xai, key: access-only, weight: 1 }
+
+providers:
+  - id: xai
+    pool_id: grok_pool
+    base_url: "https://api.x.ai/v1"
+
+model_to_pool:
+  "grok-4.6": grok_pool
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("refresh"));
     }
     #[test]
     fn model_metadata_merge_preserves_nested_pricing() {

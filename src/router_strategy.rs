@@ -137,7 +137,7 @@ fn select_weighted_random(
         .map(|(_, k)| {
             let base = k.weight;
             if strategy == RoutingStrategy::AdaptiveWeighted && base > 0 {
-                let kh = crate::db::compute_key_hash(&k.key);
+                let kh = k.identity_hash();
                 let err = metrics.error_rate(&kh);
                 let adj = (base as f64 * (1.0 - err.min(0.9))).max(1.0);
                 adj as u32
@@ -161,8 +161,8 @@ fn select_least_latency(candidates: &[(usize, &KeyEntry)], metrics: &PoolMetrics
     candidates
         .iter()
         .min_by(|(_, a), (_, b)| {
-            let la = metrics.average_latency(&crate::db::compute_key_hash(&a.key));
-            let lb = metrics.average_latency(&crate::db::compute_key_hash(&b.key));
+            let la = metrics.average_latency(&a.identity_hash());
+            let lb = metrics.average_latency(&b.identity_hash());
             la.partial_cmp(&lb).unwrap_or(std::cmp::Ordering::Equal)
         })
         .map(|(idx, _)| *idx)
@@ -175,8 +175,8 @@ fn select_least_connections(
     candidates
         .iter()
         .min_by(|(_, a), (_, b)| {
-            let ca = metrics.connections(&crate::db::compute_key_hash(&a.key));
-            let cb = metrics.connections(&crate::db::compute_key_hash(&b.key));
+            let ca = metrics.connections(&a.identity_hash());
+            let cb = metrics.connections(&b.identity_hash());
             ca.cmp(&cb)
         })
         .map(|(idx, _)| *idx)
@@ -192,18 +192,9 @@ mod tests {
 
     fn make_candidates() -> Vec<(usize, KeyEntry)> {
         vec![
-            KeyEntry {
-                key: "k1".into(),
-                weight: 1,
-            },
-            KeyEntry {
-                key: "k2".into(),
-                weight: 3,
-            },
-            KeyEntry {
-                key: "k3".into(),
-                weight: 1,
-            },
+            KeyEntry::api_key("k1", 1),
+            KeyEntry::api_key("k2", 3),
+            KeyEntry::api_key("k3", 1),
         ]
         .into_iter()
         .enumerate()

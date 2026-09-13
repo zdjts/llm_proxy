@@ -19,10 +19,41 @@ use tokio::sync::RwLock;
 use tracing;
 
 use crate::config::{
-    AlertConfig, FailoverConfig, KeyEntry, ModelMetadataConfig, ModelRouting, PoolConfig,
-    PoolStrategy, ProviderConfig, ProviderKind,
+    AlertConfig, CredentialType, FailoverConfig, KeyEntry, ModelMetadataConfig, ModelRouting,
+    PoolConfig, PoolStrategy, ProviderConfig, ProviderKind,
 };
 use crate::error::AppError;
+
+pub async fn insert_key_entry(
+    conn: &mut sqlx::SqliteConnection,
+    pool_id: &str,
+    key_entry: &KeyEntry,
+) -> Result<(), AppError> {
+    let kh = key_entry.identity_hash();
+    sqlx::query(
+        "INSERT INTO key_entry (pool_id, key_hash, key_plain, weight, enabled, cred_type, refresh_token, expires_at, issuer) \
+         VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?8)",
+    )
+    .bind(pool_id)
+    .bind(&kh)
+    .bind(&key_entry.key)
+    .bind(key_entry.weight as i64)
+    .bind(key_entry.cred_type_str())
+    .bind(key_entry.refresh.as_deref())
+    .bind(key_entry.expires)
+    .bind(key_entry.issuer.as_deref())
+    .execute(conn)
+    .await
+    .map_err(|e| AppError::Internal(format!("ConfigStore import key: {e}")))?;
+    Ok(())
+}
+
+fn parse_cred_type(raw: Option<&str>) -> CredentialType {
+    match raw {
+        Some(s) if s.eq_ignore_ascii_case("oauth") => CredentialType::Oauth,
+        _ => CredentialType::ApiKey,
+    }
+}
 
 // ── In-memory config snapshots ──
 
@@ -199,10 +230,7 @@ impl ConfigStore {
                 .await
                 .map_err(|e| AppError::Internal(format!("ConfigStore import pool: {e}")))?;
             for key_entry in &pool_cfg.keys {
-                let kh = crate::db::compute_key_hash(&key_entry.key);
-                sqlx::query("INSERT INTO key_entry (pool_id, key_hash, key_plain, weight, enabled) VALUES (?1, ?2, ?3, ?4, 1)")
-                    .bind(pool_id).bind(kh).bind(&key_entry.key).bind(key_entry.weight as i64)
-                    .execute(&mut *tx).await.map_err(|e| AppError::Internal(format!("ConfigStore import key: {e}")))?;
+                insert_key_entry(tx.as_mut(), pool_id, key_entry).await?;
             }
         }
         for provider in &config.providers {
@@ -365,8 +393,13 @@ impl ConfigStore {
         #[derive(sqlx::FromRow)]
         struct DbKeyEntry {
             pool_id: String,
+            key_hash: String,
             key_plain: String,
             weight: i64,
+            cred_type: Option<String>,
+            refresh_token: Option<String>,
+            expires_at: Option<i64>,
+            issuer: Option<String>,
         }
 
         // Load pools
@@ -383,11 +416,13 @@ impl ConfigStore {
                 .map_err(|e| AppError::Internal(format!("ConfigStore load pools: {e}")))?;
 
         // Load keys
-        let db_keys: Vec<DbKeyEntry> =
-            sqlx::query_as("SELECT pool_id, key_plain, weight FROM key_entry WHERE enabled = 1")
-                .fetch_all(&self.db)
-                .await
-                .map_err(|e| AppError::Internal(format!("ConfigStore load keys: {e}")))?;
+        let db_keys: Vec<DbKeyEntry> = sqlx::query_as(
+            "SELECT pool_id, key_hash, key_plain, weight, cred_type, refresh_token, expires_at, issuer \
+             FROM key_entry WHERE enabled = 1",
+        )
+        .fetch_all(&self.db)
+        .await
+        .map_err(|e| AppError::Internal(format!("ConfigStore load keys: {e}")))?;
 
         // Group keys by pool_id
         let mut keys_by_pool: HashMap<String, Vec<KeyEntry>> = HashMap::new();
@@ -395,6 +430,11 @@ impl ConfigStore {
             keys_by_pool.entry(k.pool_id).or_default().push(KeyEntry {
                 key: k.key_plain,
                 weight: k.weight as u32,
+                cred_type: parse_cred_type(k.cred_type.as_deref()),
+                refresh: k.refresh_token,
+                expires: k.expires_at,
+                issuer: k.issuer,
+                identity: Some(k.key_hash),
             });
         }
 

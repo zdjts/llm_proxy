@@ -213,6 +213,7 @@ async fn setup() -> (SqlitePool, TempDir, AppState, Arc<JwtService>, String) {
             pool.clone(),
             config.model_metadata.clone(),
         )),
+        credentials: Arc::new(llm_proxy::credential::CredentialRuntime::new(None)),
         budget_manager: None,
         cache: llm_proxy::cache::PromptCache::new(0),
         metrics: Arc::new(llm_proxy::metrics::Metrics::default()),

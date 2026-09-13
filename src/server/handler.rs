@@ -193,7 +193,28 @@ pub async fn chat_completions_handler(
             }
         };
 
-        let key_hash = db::compute_key_hash(&key.key);
+        let key = match state.credentials.ensure_fresh(&key).await {
+            Ok(k) => k,
+            Err(e) => {
+                let key_hash = key.identity_hash();
+                if matches!(
+                    e,
+                    crate::error::AppError::Upstream {
+                        bad_key_hint: true,
+                        ..
+                    }
+                ) {
+                    chat_service.mark_bad(&router, pool_id, &key);
+                    retries.push(key_hash);
+                    if attempts > max_retries {
+                        return Err(e);
+                    }
+                    continue;
+                }
+                return Err(e);
+            }
+        };
+        let key_hash = key.identity_hash();
 
         if !state.circuit_breaker.allow(pool_id, &key_hash) {
             retries.push(key_hash.clone());

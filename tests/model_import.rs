@@ -173,10 +173,7 @@ async fn imported_registry_is_visible_through_catalog_after_refresh() {
         (
             "pool-a".to_owned(),
             llm_proxy::config::PoolConfig {
-                keys: vec![llm_proxy::config::KeyEntry {
-                    key: "test".into(),
-                    weight: 1,
-                }],
+                keys: vec![llm_proxy::config::KeyEntry::api_key("test", 1)],
                 strategy: llm_proxy::config::PoolStrategy::WeightedRandom,
             },
             None,

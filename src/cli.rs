@@ -7,77 +7,182 @@ mod cli_impl {
     use clap::{Parser, Subcommand};
     use serde::Deserialize;
 
-    #[derive(Parser)]
+    #[derive(Parser, Debug)]
     #[command(
         name = "llm_proxy_cli",
-        about = "LLM Proxy Gateway Management CLI v2.0"
+        version,
+        about = "Manage a running llm_proxy gateway (status, keys, OAuth, export).",
+        long_about = "Talks to the admin HTTP API of a running llm_proxy process.\n\n\
+Admin routes are IP-whitelisted; this CLI must run from an allowed address.\n\
+Gateway URL is inferred from config.yaml (server.host:port) unless you pass --base-url.",
+        after_help = "Examples:\n  \
+    llm_proxy_cli status\n  \
+    llm_proxy_cli --base-url http://127.0.0.1:4000 keys\n  \
+    llm_proxy_cli oauth login xai --pool grok_pool --apply\n  \
+    llm_proxy_cli oauth import-pi --pool grok_pool --apply\n  \
+    llm_proxy_cli export --format jsonl --hours 24\n  \
+    llm_proxy_cli import-models --source models-store.json --db ./data/llm_proxy.db\n  \
+    llm_proxy_cli client-keys add sk-example --tenant default --label ci\n",
+        arg_required_else_help = true,
+        subcommand_required = true,
+        flatten_help = true
     )]
     struct Cli {
-        #[arg(short, long, default_value = "http://127.0.0.1:8080")]
+        /// Gateway base URL (scheme://host:port, no trailing path).
+        /// Default: LLM_PROXY_BASE_URL, else server.host:port in --config/config.yaml,
+        /// else http://127.0.0.1:8080.
+        #[arg(short, long, value_name = "URL", default_value_t = default_cli_base_url())]
         base_url: String,
 
-        #[arg(short, long, default_value = "")]
+        /// Path to config.yaml (same as LLM_PROXY_CONFIG). Used to infer --base-url
+        /// and the SQLite path for oauth --apply fallback / import-models.
+        #[arg(short = 'c', long, value_name = "PATH")]
+        config: Option<String>,
+
+        /// Optional admin bearer token sent as `Authorization: Bearer ...`.
+        /// The stock server authenticates admin by IP allowlist; leave empty unless
+        /// you put a reverse proxy in front that expects this header.
+        #[arg(
+            short = 'k',
+            long,
+            value_name = "TOKEN",
+            default_value = "",
+            hide_default_value = true
+        )]
         admin_key: String,
 
         #[command(subcommand)]
         command: Commands,
     }
 
-    #[derive(Subcommand)]
+    #[derive(Subcommand, Debug)]
     enum Commands {
+        /// Print uptime, request counters, and per-pool key health.
         Status,
+        /// List upstream key hashes, weights, and success rates per pool.
         Keys,
+        /// Dump Prometheus metrics from GET /metrics.
         Metrics,
+        /// Hot-reload managed config from SQLite into the running process.
         Reload,
+        /// Show recent alert events (JSON admin feed).
         Alerts,
-        #[command(name = "client-keys")]
+        /// CRUD for tenant client API keys (the keys callers send to this gateway).
+        #[command(name = "client-keys", alias = "ck")]
         ClientKeys {
             #[command(subcommand)]
             action: ClientKeyAction,
         },
+        /// Show per-tenant token and request quota usage.
         Quotas,
+        /// Print the live waterfall dashboard URL (open in a browser).
         Live,
+        /// Export recent request logs from the gateway.
         Export {
-            #[arg(short, long, default_value = "jsonl")]
+            /// Output format accepted by GET /admin/export.
+            #[arg(short, long, value_name = "FORMAT", default_value = "jsonl", value_parser = ["jsonl", "json", "parquet"])]
             format: String,
-            #[arg(short = 'H', long, default_value = "24")]
+            /// How many hours of logs to include.
+            #[arg(short = 'H', long, value_name = "HOURS", default_value = "24")]
             hours: u32,
         },
+        /// Import model metadata from a JSON file into SQLite (does not need the gateway).
+        #[command(name = "import-models")]
         ImportModels {
-            #[arg(long, default_value = "models-store.json")]
+            /// Path to models-store.json (or equivalent).
+            #[arg(long, value_name = "FILE", default_value = "models-store.json")]
             source: String,
-            #[arg(long)]
+            /// SQLite database path. Default: db.path in config.yaml.
+            #[arg(long, value_name = "FILE", default_value_t = default_db_path())]
             db: String,
+            /// Overwrite existing model rows instead of skipping them.
             #[arg(long, default_value_t = false)]
             overwrite: bool,
         },
+        /// Device-code / token import for subscription OAuth (xAI SuperGrok).
+        Oauth {
+            #[command(subcommand)]
+            action: OauthAction,
+        },
     }
 
-    #[derive(Subcommand)]
+    #[derive(Subcommand, Debug)]
+    enum OauthAction {
+        /// Device-code login (currently issuer `xai` = SuperGrok / X Premium).
+        /// Prints a YAML key fragment; with --apply also POSTs it to the gateway
+        /// (or writes local SQLite if the gateway is down).
+        Login {
+            /// OAuth issuer. Only `xai` is implemented.
+            #[arg(value_name = "ISSUER", default_value = "xai")]
+            issuer: String,
+            /// Target key pool id (required with --apply).
+            #[arg(long, value_name = "POOL_ID")]
+            pool: Option<String>,
+            /// Apply the credential to --pool on the running gateway.
+            #[arg(long, default_value_t = false, requires = "pool")]
+            apply: bool,
+            /// Key weight inside the pool (weighted-random routing).
+            #[arg(long, value_name = "N", default_value_t = 1)]
+            weight: u32,
+        },
+        /// Import xAI OAuth tokens from ~/.pi/agent/auth.json (pi `/login xai`).
+        #[command(name = "import-pi")]
+        ImportPi {
+            /// Target key pool id (required with --apply).
+            #[arg(long, value_name = "POOL_ID")]
+            pool: Option<String>,
+            /// Apply the credential to --pool on the running gateway.
+            #[arg(long, default_value_t = false, requires = "pool")]
+            apply: bool,
+            /// Key weight inside the pool (weighted-random routing).
+            #[arg(long, value_name = "N", default_value_t = 1)]
+            weight: u32,
+        },
+    }
+
+    #[derive(Subcommand, Debug)]
     enum ClientKeyAction {
+        /// List client keys (hash, tenant, enabled, label). Never prints plaintext.
         List,
+        /// Create a client key.
         Add {
+            /// Plaintext client key (stored hashed + plaintext-at-rest in SQLite).
+            #[arg(value_name = "KEY")]
             key: String,
-            #[arg(short, long, default_value = "default")]
+            /// Tenant id this key belongs to.
+            #[arg(short, long, value_name = "TENANT", default_value = "default")]
             tenant: String,
-            #[arg(short, long, default_value = "")]
+            /// Optional human label for the dashboard.
+            #[arg(short, long, value_name = "LABEL", default_value = "")]
             label: String,
         },
+        /// Patch enabled/tenant/label for an existing client key.
         Update {
+            /// First 12 hex chars of SHA-256 (as shown by `client-keys list`).
+            #[arg(value_name = "KEY_HASH")]
             key_hash: String,
-            #[arg(short = 'e', long)]
+            /// Enable or disable the key (`true` / `false`).
+            #[arg(short = 'e', long, value_name = "BOOL")]
             enabled: Option<bool>,
-            #[arg(short, long)]
+            /// Move the key to another tenant.
+            #[arg(short, long, value_name = "TENANT")]
             tenant: Option<String>,
-            #[arg(short, long)]
+            /// Replace the dashboard label.
+            #[arg(short, long, value_name = "LABEL")]
             label: Option<String>,
         },
+        /// Replace the plaintext of an existing client key (hash will change).
         Rotate {
+            /// Current key hash from `client-keys list`.
+            #[arg(value_name = "KEY_HASH")]
             key_hash: String,
-            #[arg(short, long)]
+            /// New plaintext client key.
+            #[arg(short, long, value_name = "KEY")]
             new_key: String,
         },
+        /// Delete a client key by hash.
         Delete {
+            #[arg(value_name = "KEY_HASH")]
             key_hash: String,
         },
     }
@@ -176,7 +281,9 @@ mod cli_impl {
 
     fn do_get(url: &str) -> Result<String, String> {
         let client = reqwest::blocking::Client::new();
-        let resp = client.get(url).send().map_err(|e| request_error(url, e))?;
+        let resp = attach_auth(client.get(url))
+            .send()
+            .map_err(|e| request_error(url, e))?;
         if resp.status().is_success() {
             resp.text().map_err(|e| e.to_string())
         } else {
@@ -186,8 +293,7 @@ mod cli_impl {
 
     fn do_post(url: &str, body: &str) -> Result<String, String> {
         let client = reqwest::blocking::Client::new();
-        let resp = client
-            .post(url)
+        let resp = attach_auth(client.post(url))
             .header("Content-Type", "application/json")
             .body(body.to_owned())
             .send()
@@ -203,8 +309,7 @@ mod cli_impl {
 
     fn do_patch(url: &str, body: &str) -> Result<String, String> {
         let client = reqwest::blocking::Client::new();
-        let resp = client
-            .patch(url)
+        let resp = attach_auth(client.patch(url))
             .header("Content-Type", "application/json")
             .body(body.to_owned())
             .send()
@@ -220,8 +325,7 @@ mod cli_impl {
 
     fn do_delete(url: &str) -> Result<String, String> {
         let client = reqwest::blocking::Client::new();
-        let resp = client
-            .delete(url)
+        let resp = attach_auth(client.delete(url))
             .send()
             .map_err(|e| request_error(url, e))?;
         if resp.status().is_success() {
@@ -233,8 +337,26 @@ mod cli_impl {
         }
     }
 
+    static ADMIN_KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    static CONFIG_PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+    fn attach_auth(
+        builder: reqwest::blocking::RequestBuilder,
+    ) -> reqwest::blocking::RequestBuilder {
+        match ADMIN_KEY.get().map(|s| s.as_str()).unwrap_or("") {
+            "" => builder,
+            key => builder.header("Authorization", format!("Bearer {key}")),
+        }
+    }
+
     pub fn run() -> Result<(), String> {
         let cli = Cli::parse();
+        if let Some(ref path) = cli.config {
+            let _ = CONFIG_PATH.set(path.clone());
+        }
+        if !cli.admin_key.is_empty() {
+            let _ = ADMIN_KEY.set(cli.admin_key.clone());
+        }
 
         match cli.command {
             Commands::Status => {
@@ -413,7 +535,7 @@ mod cli_impl {
 
             Commands::Live => {
                 println!("Connect to:  {}/admin/live", cli.base_url);
-                println!("WebSocket:   ws://127.0.0.1:8080/admin/live");
+                println!("WebSocket:   {}/admin/live", http_to_ws(&cli.base_url));
                 println!("Open in browser for the live waterfall UI.");
             }
 
@@ -451,8 +573,397 @@ mod cli_impl {
                     println!("{reason}");
                 }
             }
+            Commands::Oauth { action } => match action {
+                OauthAction::Login {
+                    issuer,
+                    pool,
+                    apply,
+                    weight,
+                } => {
+                    if issuer != "xai" {
+                        return Err(format!("unsupported oauth issuer '{issuer}'"));
+                    }
+                    let runtime =
+                        tokio::runtime::Runtime::new().map_err(|e| format!("runtime: {e}"))?;
+                    let entry = runtime.block_on(async {
+                        let http = reqwest::Client::new();
+                        let endpoints = llm_proxy::credential::XaiOAuthEndpoints::default();
+                        llm_proxy::credential::xai::login(&http, &endpoints, |prompt| {
+                            println!("xAI device login");
+                            println!("----------------");
+                            println!("1. Open this URL in a browser:");
+                            println!("   {}", prompt.verification_uri);
+                            println!("2. Confirm this code: {}", prompt.user_code);
+                            println!(
+                                "The code expires in {} seconds. Waiting for authorization...",
+                                prompt.expires_in_seconds
+                            );
+                        })
+                        .await
+                        .map_err(|e| e.to_string())
+                    })?;
+                    let mut entry = entry;
+                    entry.weight = weight;
+                    print_oauth_yaml(&entry);
+                    if apply {
+                        let pool =
+                            pool.ok_or_else(|| "--apply requires --pool <pool_id>".to_string())?;
+                        apply_oauth_key(&cli.base_url, &pool, &entry)?;
+                    }
+                }
+                OauthAction::ImportPi {
+                    pool,
+                    apply,
+                    weight,
+                } => {
+                    let mut entry = import_pi_xai()?;
+                    entry.weight = weight;
+                    print_oauth_yaml(&entry);
+                    if apply {
+                        let pool =
+                            pool.ok_or_else(|| "--apply requires --pool <pool_id>".to_string())?;
+                        apply_oauth_key(&cli.base_url, &pool, &entry)?;
+                    }
+                }
+            },
         }
         Ok(())
+    }
+
+    fn print_oauth_yaml(entry: &llm_proxy::config::KeyEntry) {
+        println!("Login succeeded.");
+        println!("YAML fragment for config.yaml (pools.<pool_id>.keys):");
+        println!("      - type: oauth");
+        println!(
+            "        issuer: {}",
+            entry.issuer.as_deref().unwrap_or("xai")
+        );
+        println!("        key: {:?}", entry.key);
+        println!(
+            "        refresh: {:?}",
+            entry.refresh.as_deref().unwrap_or_default()
+        );
+        if let Some(expires) = entry.expires {
+            println!("        expires: {expires}");
+        }
+        println!("        weight: {}", entry.weight);
+    }
+
+    fn apply_oauth_key(
+        base_url: &str,
+        pool: &str,
+        entry: &llm_proxy::config::KeyEntry,
+    ) -> Result<(), String> {
+        let body = serde_json::json!({
+            "key": entry.key,
+            "weight": entry.weight,
+            "type": entry.cred_type_str(),
+            "refresh": entry.refresh,
+            "expires": entry.expires,
+            "issuer": entry.issuer,
+        })
+        .to_string();
+        for url_base in candidate_base_urls(base_url) {
+            let url = format!("{url_base}/admin/api/pools/{pool}/keys");
+            match do_post(&url, &body) {
+                Ok(resp) => {
+                    println!("Applied to pool {pool} via {url_base}: {resp}");
+                    return Ok(());
+                }
+                Err(e) if e.contains("HTTP 404") => {
+                    let create_url = format!("{url_base}/admin/api/pools");
+                    let create_body = serde_json::json!({
+                        "id": pool,
+                        "strategy": "weighted_random",
+                        "keys": [serde_json::from_str::<serde_json::Value>(&body).unwrap_or(serde_json::Value::Null)],
+                    })
+                    .to_string();
+                    match do_post(&create_url, &create_body) {
+                        Ok(resp) => {
+                            println!("Created pool {pool} via {url_base}: {resp}");
+                            return Ok(());
+                        }
+                        Err(create_err) => {
+                            println!("gateway {url_base} rejected pool create: {create_err}");
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("gateway {url_base} unreachable: {e}");
+                }
+            }
+        }
+        persist_oauth_local(pool, entry)?;
+        println!(
+            "Wrote oauth credential to local sqlite. Restart the gateway to load it, or pass --base-url http://127.0.0.1:<port>"
+        );
+        Ok(())
+    }
+
+    fn candidate_base_urls(cli_base: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let push = |list: &mut Vec<String>, url: String| {
+            if !list.iter().any(|u| u == &url) {
+                list.push(url);
+            }
+        };
+        push(&mut out, cli_base.trim_end_matches('/').to_owned());
+        if let Some(from_cfg) = base_url_from_config() {
+            push(&mut out, from_cfg);
+        }
+        out
+    }
+
+    fn config_path() -> std::path::PathBuf {
+        if let Some(path) = CONFIG_PATH.get() {
+            return std::path::PathBuf::from(path);
+        }
+        std::env::var("LLM_PROXY_CONFIG")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("config.yaml"))
+    }
+
+    fn base_url_from_config() -> Option<String> {
+        let raw = std::fs::read_to_string(config_path()).ok()?;
+        let v: serde_yaml::Value = serde_yaml::from_str(&raw).ok()?;
+        let server = v.get("server")?;
+        let host = server
+            .get("host")
+            .and_then(|h| h.as_str())
+            .unwrap_or("127.0.0.1");
+        let host = if host == "0.0.0.0" { "127.0.0.1" } else { host };
+        let port = server.get("port").and_then(|p| p.as_u64())?;
+        Some(format!("http://{host}:{port}"))
+    }
+
+    fn default_cli_base_url() -> String {
+        std::env::var("LLM_PROXY_BASE_URL")
+            .ok()
+            .map(|s| s.trim().trim_end_matches('/').to_owned())
+            .filter(|s| !s.is_empty())
+            .or_else(base_url_from_config)
+            .unwrap_or_else(|| "http://127.0.0.1:8080".into())
+    }
+
+    fn default_db_path() -> String {
+        std::fs::read_to_string(config_path())
+            .ok()
+            .and_then(|raw| serde_yaml::from_str::<serde_yaml::Value>(&raw).ok())
+            .and_then(|doc| {
+                doc.get("db")
+                    .and_then(|d| d.get("path"))
+                    .and_then(|p| p.as_str())
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| "./data/llm_proxy.db".into())
+    }
+
+    fn http_to_ws(url: &str) -> String {
+        if let Some(rest) = url.strip_prefix("https://") {
+            format!("wss://{rest}")
+        } else if let Some(rest) = url.strip_prefix("http://") {
+            format!("ws://{rest}")
+        } else {
+            url.to_owned()
+        }
+    }
+
+    fn persist_oauth_local(
+        pool_id: &str,
+        entry: &llm_proxy::config::KeyEntry,
+    ) -> Result<(), String> {
+        let path = config_path();
+        let raw =
+            std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        let mut doc: serde_yaml::Value =
+            serde_yaml::from_str(&raw).map_err(|e| format!("parse {}: {e}", path.display()))?;
+
+        let key_obj = serde_yaml::Mapping::from_iter([
+            (
+                serde_yaml::Value::String("type".into()),
+                serde_yaml::Value::String(entry.cred_type_str().into()),
+            ),
+            (
+                serde_yaml::Value::String("issuer".into()),
+                serde_yaml::Value::String(entry.issuer.clone().unwrap_or_else(|| "xai".into())),
+            ),
+            (
+                serde_yaml::Value::String("key".into()),
+                serde_yaml::Value::String(entry.key.clone()),
+            ),
+            (
+                serde_yaml::Value::String("refresh".into()),
+                serde_yaml::Value::String(entry.refresh.clone().unwrap_or_default()),
+            ),
+            (
+                serde_yaml::Value::String("expires".into()),
+                serde_yaml::Value::Number(entry.expires.unwrap_or(0).into()),
+            ),
+            (
+                serde_yaml::Value::String("weight".into()),
+                serde_yaml::Value::Number(entry.weight.into()),
+            ),
+        ]);
+        let mut pool_map = serde_yaml::Mapping::new();
+        pool_map.insert(
+            serde_yaml::Value::String("keys".into()),
+            serde_yaml::Value::Sequence(vec![serde_yaml::Value::Mapping(key_obj)]),
+        );
+        pool_map.insert(
+            serde_yaml::Value::String("strategy".into()),
+            serde_yaml::Value::String("weighted_random".into()),
+        );
+        let pools = doc
+            .as_mapping_mut()
+            .ok_or_else(|| "config.yaml root must be a mapping".to_string())?
+            .entry(serde_yaml::Value::String("pools".into()))
+            .or_insert(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+        let pools = pools
+            .as_mapping_mut()
+            .ok_or_else(|| "pools must be a mapping".to_string())?;
+        pools.insert(
+            serde_yaml::Value::String(pool_id.to_owned()),
+            serde_yaml::Value::Mapping(pool_map),
+        );
+
+        let providers = doc
+            .as_mapping_mut()
+            .ok_or_else(|| "config.yaml root must be a mapping".to_string())?
+            .entry(serde_yaml::Value::String("providers".into()))
+            .or_insert(serde_yaml::Value::Sequence(Vec::new()));
+        if let Some(seq) = providers.as_sequence_mut() {
+            let exists = seq.iter().any(|p| {
+                p.get("pool_id").and_then(|v| v.as_str()) == Some(pool_id)
+                    || p.get("id").and_then(|v| v.as_str()) == Some("xai")
+            });
+            if !exists {
+                let mut provider = serde_yaml::Mapping::new();
+                provider.insert(
+                    serde_yaml::Value::String("id".into()),
+                    serde_yaml::Value::String("xai".into()),
+                );
+                provider.insert(
+                    serde_yaml::Value::String("kind".into()),
+                    serde_yaml::Value::String("openai".into()),
+                );
+                provider.insert(
+                    serde_yaml::Value::String("base_url".into()),
+                    serde_yaml::Value::String("https://api.x.ai/v1".into()),
+                );
+                provider.insert(
+                    serde_yaml::Value::String("pool_id".into()),
+                    serde_yaml::Value::String(pool_id.to_owned()),
+                );
+                seq.push(serde_yaml::Value::Mapping(provider));
+            }
+        }
+
+        let routing = doc
+            .as_mapping_mut()
+            .ok_or_else(|| "config.yaml root must be a mapping".to_string())?
+            .entry(serde_yaml::Value::String("model_to_pool".into()))
+            .or_insert(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+        if let Some(map) = routing.as_mapping_mut() {
+            map.entry(serde_yaml::Value::String("grok-4.6".into()))
+                .or_insert(serde_yaml::Value::String(pool_id.to_owned()));
+        }
+
+        let db_path = doc
+            .get("db")
+            .and_then(|d| d.get("path"))
+            .and_then(|p| p.as_str())
+            .unwrap_or("./data/llm_proxy.db")
+            .to_owned();
+        let pool_id = pool_id.to_owned();
+        let entry = entry.clone();
+        let runtime = tokio::runtime::Runtime::new().map_err(|e| format!("runtime: {e}"))?;
+        runtime.block_on(async move {
+            let db = llm_proxy::db::connect(&db_path)
+                .await
+                .map_err(|e| e.to_string())?;
+            sqlx::query("INSERT OR IGNORE INTO key_pool (id, strategy, enabled) VALUES (?1, 'weighted_random', 1)")
+                .bind(&pool_id)
+                .execute(&db)
+                .await
+                .map_err(|e| format!("insert pool: {e}"))?;
+            let existing: Option<i64> = sqlx::query_scalar(
+                "SELECT 1 FROM key_entry WHERE pool_id = ?1 AND key_hash = ?2",
+            )
+            .bind(&pool_id)
+            .bind(entry.identity_hash())
+            .fetch_optional(&db)
+            .await
+            .map_err(|e| format!("lookup key: {e}"))?;
+            if existing.is_none() {
+                let mut tx = db.begin().await.map_err(|e| format!("begin: {e}"))?;
+                llm_proxy::config_store::insert_key_entry(tx.as_mut(), &pool_id, &entry)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                tx.commit().await.map_err(|e| format!("commit: {e}"))?;
+            }
+            sqlx::query(
+                "INSERT OR IGNORE INTO provider_config (id, kind, base_url, pool_id, enabled, metadata) \
+                 VALUES ('xai', 'openai', 'https://api.x.ai/v1', ?1, 1, '{}')",
+            )
+            .bind(&pool_id)
+            .execute(&db)
+            .await
+            .map_err(|e| format!("insert provider: {e}"))?;
+            let routed: Option<i64> = sqlx::query_scalar(
+                "SELECT 1 FROM routing_config WHERE logical_model = 'grok-4.6' AND enabled = 1",
+            )
+            .fetch_optional(&db)
+            .await
+            .map_err(|e| format!("lookup routing: {e}"))?;
+            if routed.is_none() {
+                sqlx::query(
+                    "INSERT INTO routing_config (logical_model, pool_id, enabled) VALUES ('grok-4.6', ?1, 1)",
+                )
+                .bind(&pool_id)
+                .execute(&db)
+                .await
+                .map_err(|e| format!("insert routing: {e}"))?;
+            } else {
+                sqlx::query(
+                    "UPDATE routing_config SET pool_id = ?1 WHERE logical_model = 'grok-4.6'",
+                )
+                .bind(&pool_id)
+                .execute(&db)
+                .await
+                .map_err(|e| format!("update routing: {e}"))?;
+            }
+            println!("Updated sqlite {db_path}");
+            Ok::<(), String>(())
+        })?;
+        Ok(())
+    }
+
+    fn import_pi_xai() -> Result<llm_proxy::config::KeyEntry, String> {
+        let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
+        let path = std::path::PathBuf::from(home).join(".pi/agent/auth.json");
+        let raw =
+            std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        let v: serde_json::Value =
+            serde_json::from_str(&raw).map_err(|e| format!("parse auth.json: {e}"))?;
+        let xai = v
+            .get("xai")
+            .ok_or_else(|| "no xai entry in auth.json".to_string())?;
+        let cred_type = xai.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        if cred_type != "oauth" {
+            return Err("xai entry in auth.json is not oauth".into());
+        }
+        let access = xai
+            .get("access")
+            .and_then(|t| t.as_str())
+            .ok_or_else(|| "xai.access missing".to_string())?;
+        let refresh = xai
+            .get("refresh")
+            .and_then(|t| t.as_str())
+            .ok_or_else(|| "xai.refresh missing".to_string())?;
+        let expires = xai.get("expires").and_then(|t| t.as_i64());
+        Ok(llm_proxy::config::KeyEntry::oauth(
+            access, refresh, "xai", 1, expires,
+        ))
     }
 
     fn format_num(n: u64) -> String {
@@ -770,6 +1281,32 @@ mod cli_impl {
         }
 
         #[test]
+        fn oauth_apply_requires_pool() {
+            let err =
+                Cli::try_parse_from(["llm_proxy_cli", "oauth", "login", "--apply"]).unwrap_err();
+            let text = err.to_string();
+            assert!(text.contains("pool") || text.contains("--pool"), "{text}");
+        }
+
+        #[test]
+        fn root_help_documents_commands_and_examples() {
+            let err = Cli::try_parse_from(["llm_proxy_cli", "--help"]).unwrap_err();
+            let text = err.to_string();
+            assert!(text.contains("oauth"), "{text}");
+            assert!(text.contains("--base-url"), "{text}");
+            assert!(text.contains("--config"), "{text}");
+            assert!(text.contains("Examples:"), "{text}");
+            assert!(text.contains("client-keys"), "{text}");
+        }
+
+        #[test]
+        fn export_rejects_unknown_format() {
+            let err =
+                Cli::try_parse_from(["llm_proxy_cli", "export", "--format", "csv"]).unwrap_err();
+            assert!(err.to_string().contains("jsonl"), "{}", err);
+        }
+
+        #[test]
         fn request_error_redacts_url_credentials() {
             let error = reqwest::blocking::get("http://127.0.0.1:1").unwrap_err();
             let message = request_error("http://client-key@127.0.0.1:1/admin/export", error);
@@ -800,6 +1337,24 @@ mod cli_impl {
             let redacted = redact_url("http://127.0.0.1:1/admin/export?api_key=secret[REDACTED]");
             assert!(!redacted.contains("secret"));
             assert_eq!(redacted, "http://127.0.0.1:1/admin/export");
+        }
+
+        #[test]
+        fn http_to_ws_converts_schemes() {
+            assert_eq!(http_to_ws("http://127.0.0.1:4000"), "ws://127.0.0.1:4000");
+            assert_eq!(http_to_ws("https://example.com"), "wss://example.com");
+        }
+
+        #[test]
+        fn cli_accepts_custom_base_url() {
+            let cli = Cli::try_parse_from([
+                "llm_proxy_cli",
+                "--base-url",
+                "http://127.0.0.1:4000",
+                "status",
+            ])
+            .unwrap();
+            assert_eq!(cli.base_url, "http://127.0.0.1:4000");
         }
     }
 }

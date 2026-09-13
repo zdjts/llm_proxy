@@ -25,10 +25,7 @@ fn test_provider(server: &ServerGuard) -> AzureProvider {
 }
 
 fn test_key() -> KeyEntry {
-    KeyEntry {
-        key: "sk-azure-test".into(),
-        weight: 1,
-    }
+    KeyEntry::api_key("sk-azure-test", 1)
 }
 
 fn test_request() -> llm_proxy::types::ChatCompletionRequest {

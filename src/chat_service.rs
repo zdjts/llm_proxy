@@ -85,10 +85,7 @@ mod tests {
     #[test]
     fn service_can_select_a_key_from_a_live_snapshot() {
         let pool = PoolConfig {
-            keys: vec![KeyEntry {
-                key: "test-key".into(),
-                weight: 1,
-            }],
+            keys: vec![KeyEntry::api_key("test-key", 1)],
             strategy: PoolStrategy::WeightedRandom,
         };
         let mut models = HashMap::new();

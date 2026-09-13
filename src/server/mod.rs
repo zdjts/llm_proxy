@@ -21,6 +21,7 @@ use crate::circuit_breaker::CircuitBreaker;
 use crate::concurrency::ConcurrencyLimiter;
 use crate::config::Config;
 use crate::config_store::ConfigStore;
+use crate::credential::CredentialRuntime;
 use crate::metrics::Metrics;
 use crate::model_catalog::ModelCatalog;
 use crate::rbac::middleware::RbacState;
@@ -47,6 +48,8 @@ pub struct AppState {
     pub rbac_state: Option<RbacState>,
     /// v4.0 Track H: DB-backed config store for hot-reload and admin CRUD.
     pub config_store: Arc<ConfigStore>,
+    /// OAuth access-token cache and refresh.
+    pub credentials: Arc<CredentialRuntime>,
     /// v4.0 Track I: Budget manager for spend tracking.
     pub budget_manager: Option<Arc<BudgetManager>>,
 }
@@ -305,6 +308,10 @@ fn build_admin_routes(state: AppState, allowed_ips: Vec<String>) -> Router<AppSt
         .route(
             "/api/pools/{pool_id}",
             axum::routing::delete(crate::dashboard::admin_api::admin_api_delete_pool),
+        )
+        .route(
+            "/api/pools/{pool_id}/keys",
+            axum::routing::post(crate::dashboard::admin_api::admin_api_add_pool_key),
         )
         .route(
             "/api/routing",

@@ -6,7 +6,7 @@
 //!
 //! v2.0 adds dynamic key management, per-tenant quotas, provider plugin
 //! architecture, transform pipelines, multi-strategy routing, multi-level
-//! caching, live request dashboard, and distributed state support.
+//! caching, and live request dashboard.
 
 pub mod aggregator;
 pub mod alerts;
@@ -22,6 +22,7 @@ pub mod circuit_breaker;
 pub mod concurrency;
 pub mod config;
 pub mod config_store;
+pub mod credential;
 pub mod dashboard;
 pub mod db;
 pub mod db_maintenance;
@@ -37,7 +38,6 @@ pub mod provider;
 pub mod quota;
 pub mod ratelimit;
 pub mod rbac;
-pub mod redis_state;
 pub mod response_validate;
 pub mod router;
 pub mod router_strategy;

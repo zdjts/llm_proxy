@@ -18,7 +18,6 @@ use rand::distributions::WeightedIndex;
 use rand::prelude::*;
 
 use crate::config::{KeyEntry, PoolConfig};
-use crate::db;
 use crate::error::AppError;
 use crate::provider::Provider;
 
@@ -156,7 +155,7 @@ impl Router {
             .iter()
             .enumerate()
             .filter(|(_, k)| {
-                let kh = db::compute_key_hash(&k.key);
+                let kh = k.identity_hash();
                 k.weight > 0 && !self.bad_keys.is_bad(pool_id, &kh)
             })
             .collect();
@@ -179,7 +178,7 @@ impl Router {
 
     /// Mark a key as bad after receiving an upstream error with `bad_key_hint: true`.
     pub fn mark_bad(&self, pool_id: &str, key: &KeyEntry) {
-        let kh = db::compute_key_hash(&key.key);
+        let kh = key.identity_hash();
         self.bad_keys.mark_bad(pool_id, &kh);
     }
 
@@ -217,7 +216,7 @@ impl Router {
                 .keys
                 .iter()
                 .map(|k| {
-                    let kh = crate::db::compute_key_hash(&k.key);
+                    let kh = k.identity_hash();
                     let healthy = !self.bad_keys.is_bad(pool_id, &kh);
                     KeySnapshot {
                         key_hash: kh,
@@ -289,15 +288,13 @@ pub struct KeySnapshot {
 mod tests {
     use super::*;
     use crate::config::PoolConfig;
+    use crate::db;
 
     fn pool_with_weights(weights: &[u32]) -> PoolConfig {
         let keys: Vec<KeyEntry> = weights
             .iter()
             .enumerate()
-            .map(|(i, &w)| KeyEntry {
-                key: format!("sk-key-{i}"),
-                weight: w,
-            })
+            .map(|(i, &w)| KeyEntry::api_key(format!("sk-key-{i}"), w))
             .collect();
         PoolConfig {
             keys,

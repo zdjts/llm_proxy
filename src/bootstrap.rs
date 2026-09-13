@@ -20,6 +20,7 @@ use crate::concurrency::ConcurrencyLimiter;
 use crate::config::ProviderKind;
 use crate::config::{Config, FailoverConfig};
 use crate::config_store::ConfigStore;
+use crate::credential::CredentialRuntime;
 use crate::db;
 use crate::db_maintenance::{self, DbMaintenanceConfig};
 use crate::health;
@@ -171,11 +172,14 @@ pub async fn bootstrap(config_path: &str) -> anyhow::Result<BootedApp> {
         max_probe_retries: config.failover.max_probe_retries,
     };
 
+    let credentials = Arc::new(CredentialRuntime::new(Some(pool.clone())));
+
     let health_handle = health::spawn_health_task(
         Arc::clone(&bad_keys),
         pools_for_health,
         health_providers,
         health_config,
+        Arc::clone(&credentials),
         shutdown_rx,
     );
 
@@ -307,6 +311,7 @@ pub async fn bootstrap(config_path: &str) -> anyhow::Result<BootedApp> {
         db: pool.clone(),
         config: Arc::clone(&config),
         config_store: Arc::clone(&config_store),
+        credentials: Arc::clone(&credentials),
         budget_manager: Some(Arc::new(crate::budget::BudgetManager::new(pool.clone()))),
         cache: PromptCache::new(config.cache_max_entries),
         metrics: Arc::clone(&metrics),

@@ -13,13 +13,7 @@ use llm_proxy::error::AppError;
 use llm_proxy::router::{BadKeyRegistry, Router};
 
 fn pool_with_keys(keys: &[&str]) -> PoolConfig {
-    let entries: Vec<KeyEntry> = keys
-        .iter()
-        .map(|name| KeyEntry {
-            key: name.to_string(),
-            weight: 1,
-        })
-        .collect();
+    let entries: Vec<KeyEntry> = keys.iter().map(|name| KeyEntry::api_key(name, 1)).collect();
     PoolConfig {
         keys: entries,
         strategy: PoolStrategy::WeightedRandom,

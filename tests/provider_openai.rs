@@ -21,10 +21,7 @@ fn test_provider(server: &ServerGuard) -> OpenAiProvider {
 }
 
 fn test_key() -> KeyEntry {
-    KeyEntry {
-        key: "sk-test-key".into(),
-        weight: 1,
-    }
+    KeyEntry::api_key("sk-test-key", 1)
 }
 
 fn test_request() -> ChatCompletionRequest {

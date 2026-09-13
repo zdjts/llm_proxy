@@ -29,6 +29,16 @@ pools:
   deepseek_pool:
     keys:
       - { key: "REPLACE_ME_DEEPSEEK_KEY_1", weight: 1 }
+  # grok_pool:
+  #   keys:
+  #     - type: oauth
+  #       issuer: xai
+  #       key: "ACCESS_TOKEN"
+  #       refresh: "REFRESH_TOKEN"
+  #       expires: 1700000000000
+  #       weight: 1
+  #   # Import from pi: llm_proxy_cli oauth import-pi
+  #   # Login:         llm_proxy_cli oauth login xai --pool grok_pool --apply
 
 providers:
   - id: openai

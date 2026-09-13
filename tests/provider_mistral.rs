@@ -18,10 +18,7 @@ fn test_provider(server: &ServerGuard) -> MistralProvider {
 }
 
 fn test_key() -> KeyEntry {
-    KeyEntry {
-        key: "sk-mistral-test".into(),
-        weight: 1,
-    }
+    KeyEntry::api_key("sk-mistral-test", 1)
 }
 
 fn test_request() -> llm_proxy::types::ChatCompletionRequest {

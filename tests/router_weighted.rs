@@ -15,10 +15,7 @@ use llm_proxy::router::{BadKeyRegistry, Router};
 fn pool_from(keys: &[(u32, &str)]) -> PoolConfig {
     let entries: Vec<KeyEntry> = keys
         .iter()
-        .map(|&(w, name)| KeyEntry {
-            key: name.into(),
-            weight: w,
-        })
+        .map(|&(w, name)| KeyEntry::api_key(name, w))
         .collect();
     PoolConfig {
         keys: entries,

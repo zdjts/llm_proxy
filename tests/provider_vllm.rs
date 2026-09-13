@@ -18,10 +18,7 @@ fn test_provider(server: &ServerGuard) -> VllmProvider {
 }
 
 fn test_key() -> KeyEntry {
-    KeyEntry {
-        key: "sk-vllm-test".into(),
-        weight: 1,
-    }
+    KeyEntry::api_key("sk-vllm-test", 1)
 }
 
 fn test_request() -> llm_proxy::types::ChatCompletionRequest {
@@ -170,13 +167,7 @@ async fn it_handles_empty_key() {
     let codes: Arc<[u16]> = Arc::from([401, 402, 403, 429]);
     let provider = VllmProvider::new("vllm-test".into(), server.url(), codes);
     let result = provider
-        .chat(
-            test_request(),
-            &KeyEntry {
-                key: String::new(),
-                weight: 1,
-            },
-        )
+        .chat(test_request(), &KeyEntry::api_key(String::new(), 1))
         .await;
     assert!(result.is_ok());
 }

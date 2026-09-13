@@ -301,15 +301,7 @@ mod tests {
             extra: serde_json::Value::Null,
         };
 
-        let result = p
-            .chat(
-                req,
-                &KeyEntry {
-                    key: "sk-test".into(),
-                    weight: 1,
-                },
-            )
-            .await;
+        let result = p.chat(req, &KeyEntry::api_key("sk-test", 1)).await;
 
         match result {
             Err(AppError::Upstream {

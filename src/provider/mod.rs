@@ -207,10 +207,7 @@ mod tests {
             raw_usage_json: None,
         })));
 
-        let key = KeyEntry {
-            key: "sk-test".into(),
-            weight: 1,
-        };
+        let key = KeyEntry::api_key("sk-test", 1);
 
         let req = ChatCompletionRequest {
             model: "mock-model".into(),
@@ -260,10 +257,7 @@ mod tests {
                     stream_options: None,
                     extra: serde_json::Value::Null,
                 },
-                &KeyEntry {
-                    key: "k".into(),
-                    weight: 1,
-                },
+                &KeyEntry::api_key("k", 1),
             )
             .await;
 

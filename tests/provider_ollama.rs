@@ -18,10 +18,7 @@ fn test_provider(server: &ServerGuard) -> OllamaProvider {
 }
 
 fn test_key() -> KeyEntry {
-    KeyEntry {
-        key: "sk-ollama-test".into(),
-        weight: 1,
-    }
+    KeyEntry::api_key("sk-ollama-test", 1)
 }
 
 fn test_request() -> llm_proxy::types::ChatCompletionRequest {
@@ -166,12 +163,7 @@ async fn it_handles_optional_key_in_probe() {
     let codes: Arc<[u16]> = Arc::from([401, 402, 403, 429]);
     let provider = OllamaProvider::new("ollama-test".into(), server.url(), codes);
     // Use "ollama" as key — should skip Authorization header
-    let result = provider
-        .probe(&KeyEntry {
-            key: "ollama".into(),
-            weight: 1,
-        })
-        .await;
+    let result = provider.probe(&KeyEntry::api_key("ollama", 1)).await;
     assert!(result.is_ok());
 }
 

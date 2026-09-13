@@ -70,6 +70,7 @@ async fn cost_page_contains_stat_cards() {
             pool.clone(),
             config.model_metadata.clone(),
         )),
+        credentials: Arc::new(llm_proxy::credential::CredentialRuntime::new(None)),
         budget_manager: None,
     };
     let app = Router::new()
@@ -165,6 +166,7 @@ async fn help_page_serves_runbook() {
             db.clone(),
             config.model_metadata.clone(),
         )),
+        credentials: Arc::new(llm_proxy::credential::CredentialRuntime::new(None)),
         budget_manager: None,
     };
     let app = Router::new()

@@ -128,6 +128,7 @@ async fn cost_csv_endpoint_returns_200() {
             pool.clone(),
             config.model_metadata.clone(),
         )),
+        credentials: Arc::new(llm_proxy::credential::CredentialRuntime::new(None)),
         budget_manager: None,
     };
 

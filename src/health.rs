@@ -16,7 +16,7 @@ use std::time::Duration;
 use tokio::sync::watch;
 
 use crate::config::{FailoverConfig, PoolConfig};
-use crate::db;
+use crate::credential::CredentialRuntime;
 use crate::provider::Provider;
 
 /// Persistently probe bad keys and revive healthy ones.
@@ -33,6 +33,7 @@ pub async fn run_health_loop(
     pools: HashMap<String, PoolConfig>,
     providers: HashMap<String, Arc<dyn Provider>>,
     config: &FailoverConfig,
+    credentials: Arc<CredentialRuntime>,
     mut shutdown_rx: watch::Receiver<()>,
 ) {
     let interval = Duration::from_secs(config.probe_interval_secs);
@@ -54,14 +55,12 @@ pub async fn run_health_loop(
         }
 
         for (pool_id, key_hash) in &snapshot {
-            let key_entry = pools.get(pool_id).and_then(|pool| {
-                pool.keys
-                    .iter()
-                    .find(|k| db::compute_key_hash(&k.key) == *key_hash)
-            });
+            let key_entry = pools
+                .get(pool_id)
+                .and_then(|pool| pool.keys.iter().find(|k| k.identity_hash() == *key_hash));
 
             let key = match key_entry {
-                Some(k) => k,
+                Some(k) => k.clone(),
                 None => continue,
             };
 
@@ -70,7 +69,15 @@ pub async fn run_health_loop(
                 None => continue,
             };
 
-            match provider.probe(key).await {
+            let key = match credentials.ensure_fresh(&key).await {
+                Ok(k) => k,
+                Err(e) => {
+                    tracing::debug!(%pool_id, %key_hash, "oauth refresh failed during probe: {e}");
+                    continue;
+                }
+            };
+
+            match provider.probe(&key).await {
                 Ok(()) => {
                     bad_keys.remove_bad(pool_id, key_hash);
                     retries.remove(&(pool_id.clone(), key_hash.clone()));
@@ -106,9 +113,18 @@ pub fn spawn_health_task(
     pools: HashMap<String, PoolConfig>,
     providers: HashMap<String, Arc<dyn Provider>>,
     config: FailoverConfig,
+    credentials: Arc<CredentialRuntime>,
     shutdown_rx: watch::Receiver<()>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        run_health_loop(bad_keys, pools, providers, &config, shutdown_rx).await;
+        run_health_loop(
+            bad_keys,
+            pools,
+            providers,
+            &config,
+            credentials,
+            shutdown_rx,
+        )
+        .await;
     })
 }

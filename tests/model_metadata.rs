@@ -34,10 +34,7 @@ models:
     pools.insert(
         "pool-a".to_owned(),
         PoolConfig {
-            keys: vec![KeyEntry {
-                key: "upstream-test-key".to_owned(),
-                weight: 1,
-            }],
+            keys: vec![KeyEntry::api_key("upstream-test-key", 1)],
             strategy: PoolStrategy::WeightedRandom,
         },
     );
@@ -82,6 +79,7 @@ models:
         pipeline: None,
         rbac_state: None,
         config_store,
+        credentials: std::sync::Arc::new(llm_proxy::credential::CredentialRuntime::new(None)),
         budget_manager: None,
     }
 }
