@@ -20,7 +20,7 @@ use tracing;
 
 use crate::config::{
     AlertConfig, CredentialType, FailoverConfig, KeyEntry, ModelMetadataConfig, ModelRouting,
-    PoolConfig, PoolStrategy, ProviderConfig, ProviderKind,
+    PoolConfig, ProviderConfig, ProviderKind,
 };
 use crate::error::AppError;
 
@@ -201,7 +201,8 @@ impl ConfigStore {
 
         // Full-document replace for managed sections so export→import between
         // hosts converges instead of leaving stale pools/providers/routes.
-        // model_registry is still upsert-only: empty export must not wipe catalog.
+        // model_registry is catalog-owned (models.dev); export omits it and
+        // import only upserts if the YAML still carries the optional section.
         // Order matters: routing_config.pool_id FK → key_pool; key_entry cascades.
         sqlx::query("DELETE FROM routing_config")
             .execute(&mut *tx)
@@ -223,9 +224,7 @@ impl ConfigStore {
         for (pool_id, pool_cfg) in &config.pools {
             sqlx::query("INSERT INTO key_pool (id, strategy, enabled) VALUES (?1, ?2, 1)")
                 .bind(pool_id)
-                .bind(match pool_cfg.strategy {
-                    PoolStrategy::WeightedRandom => "weighted_random",
-                })
+                .bind("weighted_random")
                 .execute(&mut *tx)
                 .await
                 .map_err(|e| AppError::Internal(format!("ConfigStore import pool: {e}")))?;
@@ -258,8 +257,8 @@ impl ConfigStore {
             let params = routing
                 .default_params()
                 .map(|v| serde_json::to_string(v).unwrap_or_default());
-            sqlx::query("INSERT INTO routing_config (logical_model, pool_id, default_params, enabled) VALUES (?1, ?2, ?3, 1)")
-                .bind(model).bind(routing.pool_id()).bind(params.as_deref()).execute(&mut *tx).await
+            sqlx::query("INSERT INTO routing_config (logical_model, pool_id, default_params, upstream_model, enabled) VALUES (?1, ?2, ?3, ?4, 1)")
+                .bind(model).bind(routing.pool_id()).bind(params.as_deref()).bind(routing.upstream_model()).execute(&mut *tx).await
                 .map_err(|e| AppError::Internal(format!("ConfigStore import routing: {e}")))?;
         }
         for entry in &config.model_registry {
@@ -406,14 +405,12 @@ impl ConfigStore {
         #[derive(sqlx::FromRow)]
         struct DbPool {
             id: String,
-            strategy: String,
         }
 
-        let db_pools: Vec<DbPool> =
-            sqlx::query_as("SELECT id, strategy FROM key_pool WHERE enabled = 1")
-                .fetch_all(&self.db)
-                .await
-                .map_err(|e| AppError::Internal(format!("ConfigStore load pools: {e}")))?;
+        let db_pools: Vec<DbPool> = sqlx::query_as("SELECT id FROM key_pool WHERE enabled = 1")
+            .fetch_all(&self.db)
+            .await
+            .map_err(|e| AppError::Internal(format!("ConfigStore load pools: {e}")))?;
 
         // Load keys
         let db_keys: Vec<DbKeyEntry> = sqlx::query_as(
@@ -441,16 +438,7 @@ impl ConfigStore {
         let mut pools = HashMap::new();
         for p in db_pools {
             let keys = keys_by_pool.remove(&p.id).unwrap_or_default();
-            pools.insert(
-                p.id.clone(),
-                PoolConfig {
-                    keys,
-                    strategy: match p.strategy.as_str() {
-                        "weighted_random" => PoolStrategy::WeightedRandom,
-                        _ => PoolStrategy::WeightedRandom,
-                    },
-                },
-            );
+            pools.insert(p.id.clone(), PoolConfig { keys });
         }
 
         Ok(pools)
@@ -462,10 +450,11 @@ impl ConfigStore {
             logical_model: String,
             pool_id: String,
             default_params: Option<String>,
+            upstream_model: Option<String>,
         }
 
         let rows: Vec<DbRouting> = sqlx::query_as(
-            "SELECT logical_model, pool_id, default_params FROM routing_config WHERE enabled = 1",
+            "SELECT logical_model, pool_id, default_params, upstream_model FROM routing_config WHERE enabled = 1",
         )
         .fetch_all(&self.db)
         .await
@@ -478,10 +467,15 @@ impl ConfigStore {
                     .default_params
                     .and_then(|s| serde_json::from_str(&s).ok())
                     .unwrap_or(serde_json::Value::Null);
-                let routing = if default_params.is_object() {
+                let upstream_model = r
+                    .upstream_model
+                    .map(|s| s.trim().to_owned())
+                    .filter(|s| !s.is_empty());
+                let routing = if default_params.is_object() || upstream_model.is_some() {
                     ModelRouting::WithParams {
                         pool: r.pool_id,
                         default_params,
+                        upstream_model,
                     }
                 } else {
                     ModelRouting::Simple(r.pool_id)
@@ -864,6 +858,26 @@ mod tests {
             "new_pool",
             "model routing should be hot-reloaded to new pool"
         );
+    }
+
+    #[tokio::test]
+    async fn import_yaml_preserves_upstream_model_alias() {
+        let (pool, _dir) = setup_test_db().await;
+        let store = ConfigStore::load(pool.clone()).await.unwrap();
+        let yaml = "server:\n  host: 127.0.0.1\n  port: 4000\nauth:\n  client_keys: []\ndb:\n  path: ./test.db\nfailover:\n  enabled: true\npools:\n  test_pool:\n    keys:\n      - key: sk-test-abc\n        weight: 1\nproviders:\n  - id: test_provider\n    pool_id: test_pool\n    base_url: https://api.test.com/v1\nmodel_to_pool:\n  deepseek-v4-flash:\n    pool: test_pool\n    upstream_model: deepseek-v4-flash-0731\n";
+        store.import_yaml(yaml).await.unwrap();
+        let routing = store.snapshot().await.model_routing;
+        assert_eq!(
+            routing["deepseek-v4-flash"].upstream_model(),
+            Some("deepseek-v4-flash-0731")
+        );
+        let stored: Option<String> = sqlx::query_scalar(
+            "SELECT upstream_model FROM routing_config WHERE logical_model = 'deepseek-v4-flash'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(stored.as_deref(), Some("deepseek-v4-flash-0731"));
     }
 
     #[tokio::test]

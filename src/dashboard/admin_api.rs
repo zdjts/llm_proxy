@@ -183,14 +183,6 @@ struct ExportDocument {
     providers: Vec<serde_json::Value>,
     pools: std::collections::BTreeMap<String, ExportPool>,
     model_to_pool: std::collections::BTreeMap<String, serde_json::Value>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    model_registry: Vec<serde_json::Value>,
-}
-
-fn pool_strategy_to_yaml(strategy: &crate::config::PoolStrategy) -> &'static str {
-    match strategy {
-        crate::config::PoolStrategy::WeightedRandom => "weighted_random",
-    }
 }
 
 fn provider_kind_to_yaml(kind: &crate::config::ProviderKind) -> &'static str {
@@ -220,7 +212,7 @@ pub async fn admin_api_config_export(
             (
                 id.clone(),
                 ExportPool {
-                    strategy: pool_strategy_to_yaml(&pool.strategy).into(),
+                    strategy: "weighted_random".into(),
                     keys: pool
                         .keys
                         .iter()
@@ -255,47 +247,7 @@ pub async fn admin_api_config_export(
     let model_to_pool = snapshot
         .model_routing
         .iter()
-        .map(|(model, routing)| {
-            let value = match routing {
-                crate::config::ModelRouting::Simple(pool) => {
-                    serde_json::Value::String(pool.clone())
-                }
-                crate::config::ModelRouting::WithParams {
-                    pool,
-                    default_params,
-                } => serde_json::json!({
-                    "pool": pool,
-                    "default_params": default_params,
-                }),
-            };
-            (model.clone(), value)
-        })
-        .collect();
-    let model_registry = snapshot
-        .model_registry
-        .iter()
-        .map(|entry| {
-            let capabilities = entry
-                .capabilities_json
-                .as_deref()
-                .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-                .unwrap_or_else(|| serde_json::json!({}));
-            serde_json::json!({
-                "id": entry.id,
-                "display_name": entry.display_name,
-                "provider_kind": entry.provider_kind,
-                "provider_config_id": entry.provider_config_id,
-                "supports_vision": entry.supports_vision,
-                "supports_tool_calling": entry.supports_tool_calling,
-                "supports_json_mode": entry.supports_json_mode,
-                "max_context_tokens": entry.max_context_tokens,
-                "max_output_tokens": entry.max_output_tokens,
-                "input_price_per_1m": entry.input_price_per_1m,
-                "output_price_per_1m": entry.output_price_per_1m,
-                "capabilities_json": capabilities,
-                "enabled": entry.enabled,
-            })
-        })
+        .map(|(model, routing)| (model.clone(), routing.to_export_value()))
         .collect();
     let runtime = &snapshot.runtime.failover;
     let yaml = serde_yaml::to_string(&ExportDocument {
@@ -323,7 +275,6 @@ pub async fn admin_api_config_export(
         providers,
         pools,
         model_to_pool,
-        model_registry,
     })
     .map_err(|e| AppError::Internal(format!("export config: {e}")))?;
     Ok((
@@ -1134,7 +1085,7 @@ pub async fn admin_api_list_pools(
         .map(|(id, cfg)| {
             serde_json::json!({
                 "id": id,
-                "strategy": format!("{:?}", cfg.strategy).to_lowercase(),
+                "strategy": "weighted_random",
                 "key_count": cfg.keys.len(),
                 "keys": cfg.keys.iter().map(|k| serde_json::json!({
                     "key_hash": k.identity_hash(),
@@ -1374,6 +1325,7 @@ pub async fn admin_api_list_routing(
             serde_json::json!({
                 "logical_model": model,
                 "pool_id": r.pool_id(),
+                "upstream_model": r.upstream_model(),
             })
         })
         .collect();
@@ -1387,6 +1339,8 @@ pub struct CreateRoutingRequest {
     pub pool_id: String,
     #[serde(default)]
     pub default_params: Option<serde_json::Value>,
+    #[serde(default)]
+    pub upstream_model: Option<String>,
 }
 
 pub async fn admin_api_create_routing(
@@ -1410,13 +1364,19 @@ pub async fn admin_api_create_routing(
         .default_params
         .as_ref()
         .and_then(|v| serde_json::to_string(v).ok());
+    let upstream_model = req
+        .upstream_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
 
     sqlx::query(
-        "INSERT OR REPLACE INTO routing_config (logical_model, pool_id, default_params) VALUES (?1, ?2, ?3)",
+        "INSERT OR REPLACE INTO routing_config (logical_model, pool_id, default_params, upstream_model) VALUES (?1, ?2, ?3, ?4)",
     )
     .bind(&req.logical_model)
     .bind(&req.pool_id)
     .bind(params_str.as_deref())
+    .bind(upstream_model)
     .execute(store.db())
     .await
     .map_err(|e| AppError::Internal(format!("create routing: {e}")))?;
@@ -1448,7 +1408,7 @@ pub async fn admin_api_delete_routing(
     Path(logical_model): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let store = config_store(&state)?;
-    let before: Option<String> = sqlx::query_scalar("SELECT json_object('logical_model', logical_model, 'pool_id', pool_id, 'default_params', default_params) FROM routing_config WHERE logical_model = ?1")
+    let before: Option<String> = sqlx::query_scalar("SELECT json_object('logical_model', logical_model, 'pool_id', pool_id, 'default_params', default_params, 'upstream_model', upstream_model) FROM routing_config WHERE logical_model = ?1")
         .bind(&logical_model).fetch_optional(store.db()).await
         .map_err(|e| AppError::Internal(format!("load routing for audit: {e}")))?;
 
@@ -1627,17 +1587,23 @@ pub async fn admin_api_rollback_config(
             }
         }
         ("routing_config", "routing.delete") => {
-            if let (Some(model), Some(pool_id), Some(default_params)) = (
+            if let (Some(model), Some(pool_id)) = (
                 before.get("logical_model").and_then(|v| v.as_str()),
                 before.get("pool_id").and_then(|v| v.as_str()),
-                before.get("default_params"),
             ) {
+                let default_params = before.get("default_params").cloned();
+                let params_str = default_params
+                    .as_ref()
+                    .filter(|v| !v.is_null())
+                    .and_then(|v| serde_json::to_string(v).ok());
+                let upstream_model = before.get("upstream_model").and_then(|v| v.as_str());
                 sqlx::query(
-                    "INSERT OR REPLACE INTO routing_config (logical_model, pool_id, default_params, enabled) VALUES (?1, ?2, ?3, 1)",
+                    "INSERT OR REPLACE INTO routing_config (logical_model, pool_id, default_params, upstream_model, enabled) VALUES (?1, ?2, ?3, ?4, 1)",
                 )
                 .bind(model)
                 .bind(pool_id)
-                .bind(serde_json::to_string(default_params).unwrap_or_else(|_| "{}".into()))
+                .bind(params_str.as_deref())
+                .bind(upstream_model)
                 .execute(store.db())
                 .await
                 .map_err(|e| AppError::Internal(format!("rollback routing: {e}")))?;

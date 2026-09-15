@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use llm_proxy::config::{KeyEntry, PoolConfig, PoolStrategy};
+use llm_proxy::config::{KeyEntry, PoolConfig};
 use llm_proxy::db;
 use llm_proxy::router::{BadKeyRegistry, Router};
 
@@ -17,10 +17,7 @@ fn pool_from(keys: &[(u32, &str)]) -> PoolConfig {
         .iter()
         .map(|&(w, name)| KeyEntry::api_key(name, w))
         .collect();
-    PoolConfig {
-        keys: entries,
-        strategy: PoolStrategy::WeightedRandom,
-    }
+    PoolConfig { keys: entries }
 }
 
 fn test_router() -> (Router, Arc<BadKeyRegistry>) {

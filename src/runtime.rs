@@ -36,8 +36,15 @@ pub async fn rebuild_router(
         }
     }
 
-    let mut model_map: HashMap<String, (String, PoolConfig, Option<serde_json::Value>)> =
-        HashMap::new();
+    let mut model_map: HashMap<
+        String,
+        (
+            String,
+            PoolConfig,
+            Option<serde_json::Value>,
+            Option<String>,
+        ),
+    > = HashMap::new();
     for (model, route) in routing.iter() {
         let pool_id = route.pool_id().to_owned();
         let pool = pools
@@ -46,7 +53,12 @@ pub async fn rebuild_router(
             .ok_or_else(|| AppError::Config(format!("pool '{pool_id}' not found")))?;
         model_map.insert(
             model.clone(),
-            (pool_id, pool, route.default_params().cloned()),
+            (
+                pool_id,
+                pool,
+                route.default_params().cloned(),
+                route.upstream_model().map(str::to_owned),
+            ),
         );
     }
 

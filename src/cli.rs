@@ -20,8 +20,10 @@ Gateway URL is inferred from config.yaml (server.host:port) unless you pass --ba
     llm_proxy_cli --base-url http://127.0.0.1:4000 keys\n  \
     llm_proxy_cli oauth login xai --pool grok_pool --apply\n  \
     llm_proxy_cli oauth import-pi --pool grok_pool --apply\n  \
+    llm_proxy_cli config export -o config.yaml\n  \
+    llm_proxy_cli config import config.yaml\n  \
     llm_proxy_cli export --format jsonl --hours 24\n  \
-    llm_proxy_cli import-models --source models-store.json --db ./data/llm_proxy.db\n  \
+    llm_proxy_cli import-models --db ./data/llm_proxy.db\n  \
     llm_proxy_cli client-keys add sk-example --tenant default --label ci\n",
         arg_required_else_help = true,
         subcommand_required = true,
@@ -65,6 +67,11 @@ Gateway URL is inferred from config.yaml (server.host:port) unless you pass --ba
         Metrics,
         /// Hot-reload managed config from SQLite into the running process.
         Reload,
+        /// Export/import managed gateway config (pools, providers, routing).
+        Config {
+            #[command(subcommand)]
+            action: ConfigAction,
+        },
         /// Show recent alert events (JSON admin feed).
         Alerts,
         /// CRUD for tenant client API keys (the keys callers send to this gateway).
@@ -84,11 +91,15 @@ Gateway URL is inferred from config.yaml (server.host:port) unless you pass --ba
             #[arg(short = 'H', long, value_name = "HOURS", default_value = "24")]
             hours: u32,
         },
-        /// Import model metadata from a JSON file into SQLite (does not need the gateway).
+        /// Import model metadata from models.dev into SQLite (does not need the gateway).
         #[command(name = "import-models")]
         ImportModels {
-            /// Path to models-store.json (or equivalent).
-            #[arg(long, value_name = "FILE", default_value = "models-store.json")]
+            /// models.dev catalog URL, or a local models.dev JSON file.
+            #[arg(
+                long,
+                value_name = "SOURCE",
+                default_value = llm_proxy::model_import::DEFAULT_SOURCE
+            )]
             source: String,
             /// SQLite database path. Default: db.path in config.yaml.
             #[arg(long, value_name = "FILE", default_value_t = default_db_path())]
@@ -101,6 +112,28 @@ Gateway URL is inferred from config.yaml (server.host:port) unless you pass --ba
         Oauth {
             #[command(subcommand)]
             action: OauthAction,
+        },
+    }
+
+    #[derive(Subcommand, Debug)]
+    enum ConfigAction {
+        /// Dump runtime config as YAML (`GET /admin/api/config/export`).
+        /// `auth.client_keys` is empty: plaintext client keys are not recoverable.
+        /// Model catalog (`model_registry`) is omitted; refresh it with `import-models`.
+        /// Routing may include `upstream_model` aliases (client name → provider name).
+        Export {
+            /// Write to FILE instead of stdout.
+            #[arg(short, long, value_name = "FILE")]
+            output: Option<String>,
+        },
+        /// Apply YAML to the running gateway (`POST /admin/api/config/import`).
+        Import {
+            /// Path to YAML (`-` reads stdin).
+            #[arg(value_name = "FILE", default_value = "-", allow_hyphen_values = true)]
+            file: String,
+            /// Validate only; do not apply.
+            #[arg(long, default_value_t = false)]
+            dry_run: bool,
         },
     }
 
@@ -244,6 +277,14 @@ Gateway URL is inferred from config.yaml (server.host:port) unless you pass --ba
     struct ClientKeyList {
         keys: Vec<ClientKeyRecord>,
         total: usize,
+    }
+
+    #[derive(Deserialize)]
+    struct ConfigDocumentResp {
+        ok: bool,
+        dry_run: bool,
+        version: u64,
+        message: String,
     }
 
     fn redact_url(url: &str) -> String {
@@ -410,6 +451,46 @@ Gateway URL is inferred from config.yaml (server.host:port) unless you pass --ba
                 println!("{body}");
             }
 
+            Commands::Config { action } => match action {
+                ConfigAction::Export { output } => {
+                    let url = format!("{}/admin/api/config/export", cli.base_url);
+                    let yaml = do_get(&url)?;
+                    match output {
+                        Some(path) => {
+                            std::fs::write(&path, &yaml)
+                                .map_err(|e| format!("write {path}: {e}"))?;
+                            eprintln!("Wrote {path}");
+                        }
+                        None => print!("{yaml}"),
+                    }
+                }
+                ConfigAction::Import { file, dry_run } => {
+                    let yaml = if file == "-" {
+                        use std::io::Read;
+                        let mut buf = String::new();
+                        std::io::stdin()
+                            .read_to_string(&mut buf)
+                            .map_err(|e| format!("stdin: {e}"))?;
+                        buf
+                    } else {
+                        std::fs::read_to_string(&file).map_err(|e| format!("read {file}: {e}"))?
+                    };
+                    let url = format!("{}/admin/api/config/import", cli.base_url);
+                    let body = serde_json::json!({
+                        "yaml": yaml,
+                        "dry_run": dry_run,
+                    })
+                    .to_string();
+                    let resp = do_post(&url, &body)?;
+                    let r: ConfigDocumentResp =
+                        serde_json::from_str(&resp).map_err(|e| format!("parse: {e}"))?;
+                    println!("{}", r.message);
+                    if r.ok && !r.dry_run {
+                        println!("version={}", r.version);
+                    }
+                }
+            },
+
             Commands::Alerts => {
                 let url = format!("{}/admin/alerts?format=json", cli.base_url);
                 let body = do_get(&url)?;
@@ -524,7 +605,7 @@ Gateway URL is inferred from config.yaml (server.host:port) unless you pass --ba
                     let pool = sqlx::SqlitePool::connect(&format!("sqlite://{db}"))
                         .await
                         .map_err(|e| format!("database: {e}"))?;
-                    llm_proxy::model_import::import_file(&pool, source, overwrite)
+                    llm_proxy::model_import::import_source(&pool, &source, overwrite)
                         .await
                         .map_err(|e| e.to_string())
                 })?;
@@ -537,6 +618,11 @@ Gateway URL is inferred from config.yaml (server.host:port) unless you pass --ba
                 );
                 for reason in report.reasons {
                     println!("{reason}");
+                }
+                if report.counts.conflicts > 0 && !overwrite {
+                    println!(
+                        "existing registry rows were left unchanged; pass --overwrite to refresh them from models.dev"
+                    );
                 }
             }
             Commands::Oauth { action } => match action {
@@ -1244,6 +1330,8 @@ Gateway URL is inferred from config.yaml (server.host:port) unless you pass --ba
             assert!(text.contains("--config"), "{text}");
             assert!(text.contains("Examples:"), "{text}");
             assert!(text.contains("client-keys"), "{text}");
+            assert!(text.contains("config export"), "{text}");
+            assert!(text.contains("config import"), "{text}");
         }
 
         #[test]
@@ -1251,6 +1339,83 @@ Gateway URL is inferred from config.yaml (server.host:port) unless you pass --ba
             let err =
                 Cli::try_parse_from(["llm_proxy_cli", "export", "--format", "csv"]).unwrap_err();
             assert!(err.to_string().contains("jsonl"), "{}", err);
+        }
+
+        #[test]
+        fn config_export_parses_optional_output_path() {
+            let cli =
+                Cli::try_parse_from(["llm_proxy_cli", "config", "export", "-o", "config.yaml"])
+                    .unwrap();
+            assert!(matches!(
+                cli.command,
+                Commands::Config {
+                    action: ConfigAction::Export { ref output }
+                } if output.as_deref() == Some("config.yaml")
+            ));
+        }
+
+        #[test]
+        fn config_import_parses_file_and_dry_run() {
+            let cli = Cli::try_parse_from([
+                "llm_proxy_cli",
+                "config",
+                "import",
+                "config.yaml",
+                "--dry-run",
+            ])
+            .unwrap();
+            assert!(matches!(
+                cli.command,
+                Commands::Config {
+                    action: ConfigAction::Import {
+                        ref file,
+                        dry_run: true,
+                    }
+                } if file == "config.yaml"
+            ));
+        }
+
+        #[test]
+        fn config_export_get_hits_admin_api() {
+            let mut server = mockito::Server::new();
+            let mock = server
+                .mock("GET", "/admin/api/config/export")
+                .with_status(200)
+                .with_header("content-type", "text/yaml; charset=utf-8")
+                .with_body("server:\n  host: 127.0.0.1\n")
+                .create();
+
+            let url = format!("{}/admin/api/config/export", server.url());
+            assert_eq!(do_get(&url).unwrap(), "server:\n  host: 127.0.0.1\n");
+            mock.assert();
+        }
+
+        #[test]
+        fn config_import_post_sends_yaml_json_body() {
+            let mut server = mockito::Server::new();
+            let mock = server
+                .mock("POST", "/admin/api/config/import")
+                .match_header("content-type", "application/json")
+                .match_body(mockito::Matcher::Json(serde_json::json!({
+                    "yaml": "server:\n  host: 127.0.0.1\n",
+                    "dry_run": true,
+                })))
+                .with_status(200)
+                .with_body(r#"{"ok":true,"dry_run":true,"version":0,"message":"configuration is valid; no changes were made"}"#)
+                .create();
+
+            let url = format!("{}/admin/api/config/import", server.url());
+            let body = serde_json::json!({
+                "yaml": "server:\n  host: 127.0.0.1\n",
+                "dry_run": true,
+            })
+            .to_string();
+            let resp = do_post(&url, &body).unwrap();
+            mock.assert();
+            let r: ConfigDocumentResp = serde_json::from_str(&resp).unwrap();
+            assert!(r.ok);
+            assert!(r.dry_run);
+            assert_eq!(r.version, 0);
         }
 
         #[test]

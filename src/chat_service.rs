@@ -56,6 +56,7 @@ impl ChatCompletionService {
         &'a PoolConfig,
         &'a str,
         Option<&'a serde_json::Value>,
+        Option<&'a str>,
     ) {
         result
     }
@@ -66,7 +67,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    use crate::config::{KeyEntry, PoolStrategy};
+    use crate::config::{KeyEntry, PoolConfig};
     use crate::router::BadKeyRegistry;
 
     #[test]
@@ -86,10 +87,9 @@ mod tests {
     fn service_can_select_a_key_from_a_live_snapshot() {
         let pool = PoolConfig {
             keys: vec![KeyEntry::api_key("test-key", 1)],
-            strategy: PoolStrategy::WeightedRandom,
         };
         let mut models = HashMap::new();
-        models.insert("model".into(), ("pool".into(), pool.clone(), None));
+        models.insert("model".into(), ("pool".into(), pool.clone(), None, None));
         let router = Arc::new(Router::new(
             models,
             HashMap::new(),

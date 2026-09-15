@@ -150,6 +150,32 @@ async fn it_returns_once_on_2xx_non_stream() {
 }
 
 #[tokio::test]
+async fn it_accepts_openai_compatible_response_without_created() {
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{"id":"chatcmpl-glm","object":"chat.completion","model":"glm-5.3-flash","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":8,"completion_tokens":4,"total_tokens":12}}"#,
+        )
+        .create_async()
+        .await;
+
+    let provider = test_provider(&server);
+    let result = provider.chat(test_request(), &test_key()).await.unwrap();
+
+    match result {
+        ProviderResponse::Once(resp) => {
+            assert_eq!(resp.created, 0);
+            assert_eq!(resp.model, "glm-5.3-flash");
+            assert_eq!(resp.choices[0].message.content.as_deref(), Some("hello"));
+        }
+        ProviderResponse::Stream { .. } => panic!("expected Once, got Stream"),
+    }
+}
+
+#[tokio::test]
 async fn it_returns_stream_on_2xx_sse() {
     let mut server = mockito::Server::new_async().await;
     server

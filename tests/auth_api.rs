@@ -60,7 +60,6 @@ async fn setup() -> (SqlitePool, TempDir, AppState) {
         rate_limit: Default::default(),
         cache_max_entries: 256,
         alerts: Default::default(),
-        fallback_models: Default::default(),
         concurrency: Default::default(),
     });
 
@@ -85,7 +84,6 @@ async fn setup() -> (SqlitePool, TempDir, AppState) {
         metrics: Arc::new(llm_proxy::metrics::Metrics::default()),
         circuit_breaker: Arc::new(llm_proxy::circuit_breaker::CircuitBreaker::with_defaults()),
         concurrency: Arc::new(llm_proxy::concurrency::ConcurrencyLimiter::new(50, 500)),
-        fallback_config: Arc::new(llm_proxy::fallback::FallbackConfig::default()),
         alert_tx,
         error_burst_counters: Arc::new(dashmap::DashMap::new()),
         alert_snapshot: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
@@ -694,7 +692,10 @@ async fn config_export_round_trips_model_registry_metadata() {
     )
     .unwrap();
     assert!(yaml.contains("grok-4.6"));
-    assert!(yaml.contains("model_registry:"));
+    assert!(
+        !yaml.contains("model_registry:"),
+        "config export must omit models.dev catalog rows"
+    );
 
     sqlx::query("DELETE FROM model_registry WHERE id = 'grok-4.6'")
         .execute(&pool)
@@ -718,30 +719,12 @@ async fn config_export_round_trips_model_registry_metadata() {
         .unwrap();
     assert_eq!(import.status(), StatusCode::OK);
 
-    let restored: (
-        String,
-        String,
-        Option<String>,
-        i64,
-        Option<f64>,
-        Option<String>,
-    ) = sqlx::query_as(
-        "SELECT display_name, provider_kind, provider_config_id, supports_vision,
-                    input_price_per_1m, capabilities_json
-             FROM model_registry WHERE id = 'grok-4.6'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(restored.0, "Grok 4.6");
-    assert_eq!(restored.1, "openai");
-    assert_eq!(restored.2.as_deref(), Some("registry-provider"));
-    assert_eq!(restored.3, 1);
-    assert_eq!(restored.4, Some(2.0));
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&restored.5.unwrap()).unwrap(),
-        capabilities
-    );
+    let remaining: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM model_registry WHERE id = 'grok-4.6'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(remaining, 0);
     let route_pool: String =
         sqlx::query_scalar("SELECT pool_id FROM routing_config WHERE logical_model = 'grok-4.6'")
             .fetch_one(&pool)

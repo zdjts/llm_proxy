@@ -62,8 +62,14 @@ model_to_pool:
     pool: deepseek_pool
     default_params:
       thinking: { level: "low" }
+  # Client alias → rewrite request.model before the upstream call.
+  "deepseek-v4-flash":
+    pool: deepseek_pool
+    upstream_model: deepseek-v4-flash-0731
 
-# Optional model metadata (merged defaults → pool → model)
+# Optional display overlay (merged defaults → pool → model).
+# Catalog name/pricing/capabilities come from models.dev via
+# `llm_proxy_cli import-models`, not from this file or config export.
 # model_metadata:
 #   defaults:
 #     context_window: 128000

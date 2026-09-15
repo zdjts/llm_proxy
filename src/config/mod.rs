@@ -17,12 +17,11 @@ use serde::{Deserialize, Serialize};
 
 /// Feature-module YAML types, re-exported so `config` is the consistent home.
 pub use crate::auth::ClientKeyEntry;
-pub use crate::fallback::FallbackConfig;
 
 /// Root configuration loaded from `config.yaml`.
 ///
 /// YAML-only after boot: `server`, `auth`, `admin`, `rate_limit`, `concurrency`,
-/// `fallback_models`, `cache_max_entries`, `failover`/`alerts` (also copied
+/// `cache_max_entries`, `failover`/`alerts` (also copied
 /// into [`crate::config_store::RuntimePolicy`]).
 /// Bootstrapped then DB-owned: `pools`, `providers`, `model_to_pool`.
 /// Accounting vs display: `pricing` vs `model_metadata` (do not merge).
@@ -35,8 +34,8 @@ pub struct Config {
     pub pools: HashMap<String, PoolConfig>,
     pub providers: Vec<ProviderConfig>,
     pub model_to_pool: HashMap<String, ModelRouting>,
-    /// Optional managed model registry rows carried through explicit YAML
-    /// import/export. Empty on bootstrap configs that only define routing.
+    /// Optional managed model registry rows. Config export omits this; catalog
+    /// updates come from models.dev via `import-models`. Import still accepts it.
     #[serde(default)]
     pub model_registry: Vec<ModelRegistryConfig>,
     #[serde(default)]
@@ -51,8 +50,6 @@ pub struct Config {
     pub cache_max_entries: usize,
     #[serde(default)]
     pub alerts: AlertConfig,
-    #[serde(default)]
-    pub fallback_models: FallbackConfig,
     #[serde(default)]
     pub concurrency: ConcurrencyConfig,
 }
@@ -127,15 +124,6 @@ fn default_max_retries() -> u32 {
     1
 }
 
-/// Key-selection strategy for a pool. Per ADR §3.1 must be an enum.
-#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum PoolStrategy {
-    /// Weighted random selection by each key's weight.
-    #[default]
-    WeightedRandom,
-}
-
 /// Provider kind for dispatch.
 ///
 /// Wire name is `openai` (matches DB / docs). `open_ai` is accepted as a
@@ -163,9 +151,6 @@ fn default_kind() -> ProviderKind {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct PoolConfig {
     pub keys: Vec<KeyEntry>,
-    /// Key-selection strategy. Defaults to [`PoolStrategy::WeightedRandom`].
-    #[serde(default)]
-    pub strategy: PoolStrategy,
 }
 
 /// Kind of upstream credential stored in a [`KeyEntry`].
@@ -325,7 +310,10 @@ fn default_registry_enabled() -> bool {
 }
 
 /// Model-to-pool routing entry. Accepts either a plain pool-id string or an
-/// object with `pool` and optional `default_params` for request injection.
+/// object with `pool`, optional `default_params`, and optional `upstream_model`.
+///
+/// `upstream_model` is the name sent to the provider. The map key remains the
+/// client-facing alias (for example `deepseek-v4-flash` → `deepseek-v4-flash-0731`).
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(untagged)]
 pub enum ModelRouting {
@@ -334,6 +322,8 @@ pub enum ModelRouting {
         pool: String,
         #[serde(default)]
         default_params: serde_json::Value,
+        #[serde(default)]
+        upstream_model: Option<String>,
     },
 }
 
@@ -354,6 +344,48 @@ impl ModelRouting {
                 } else {
                     None
                 }
+            }
+        }
+    }
+
+    pub fn upstream_model(&self) -> Option<&str> {
+        match self {
+            ModelRouting::Simple(_) => None,
+            ModelRouting::WithParams { upstream_model, .. } => upstream_model
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty()),
+        }
+    }
+
+    pub fn to_export_value(&self) -> serde_json::Value {
+        match self {
+            ModelRouting::Simple(pool) => serde_json::Value::String(pool.clone()),
+            ModelRouting::WithParams {
+                pool,
+                default_params,
+                upstream_model,
+            } => {
+                let upstream = upstream_model
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                let params = default_params.is_object().then_some(default_params);
+                if upstream.is_none() && params.is_none() {
+                    return serde_json::Value::String(pool.clone());
+                }
+                let mut object = serde_json::Map::new();
+                object.insert("pool".into(), serde_json::Value::String(pool.clone()));
+                if let Some(params) = params {
+                    object.insert("default_params".into(), params.clone());
+                }
+                if let Some(upstream) = upstream {
+                    object.insert(
+                        "upstream_model".into(),
+                        serde_json::Value::String(upstream.to_owned()),
+                    );
+                }
+                serde_json::Value::Object(object)
             }
         }
     }
@@ -746,6 +778,45 @@ model_to_pool:
         assert_eq!(config.server.port, 8080);
         assert_eq!(config.pools.len(), 1);
         assert!(config.model_to_pool.contains_key("test-model"));
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn it_parses_upstream_model_alias() {
+        let yaml = r#"
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+auth:
+  client_keys:
+    - { key: "sk-test" }
+
+db:
+  path: "./test.db"
+
+failover:
+  enabled: true
+
+pools:
+  test_pool:
+    keys:
+      - { key: "sk-aaa", weight: 1 }
+
+providers:
+  - id: test
+    pool_id: test_pool
+    base_url: "https://api.test.com/v1"
+
+model_to_pool:
+  "deepseek-v4-flash":
+    pool: test_pool
+    upstream_model: deepseek-v4-flash-0731
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        let routing = &config.model_to_pool["deepseek-v4-flash"];
+        assert_eq!(routing.pool_id(), "test_pool");
+        assert_eq!(routing.upstream_model(), Some("deepseek-v4-flash-0731"));
         config.validate().unwrap();
     }
 

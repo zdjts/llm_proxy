@@ -7,17 +7,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use llm_proxy::config::{KeyEntry, PoolConfig, PoolStrategy};
+use llm_proxy::config::{KeyEntry, PoolConfig};
 use llm_proxy::db;
 use llm_proxy::error::AppError;
 use llm_proxy::router::{BadKeyRegistry, Router};
 
 fn pool_with_keys(keys: &[&str]) -> PoolConfig {
     let entries: Vec<KeyEntry> = keys.iter().map(|name| KeyEntry::api_key(name, 1)).collect();
-    PoolConfig {
-        keys: entries,
-        strategy: PoolStrategy::WeightedRandom,
-    }
+    PoolConfig { keys: entries }
 }
 
 #[test]

@@ -1,7 +1,7 @@
 //! Request handler — split from server/mod.rs (Module C2 — v2.0).
 //!
 //! Failover/retry across keys is here and in `router`, not in `Provider::chat`.
-//! Server/router match only `Arc<dyn Provider>`. SSE stays in `sse_relay`.
+//! Server/router match only `Arc<dyn Provider>`.
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -139,7 +139,12 @@ pub async fn chat_completions_handler(
 
     let chat_service = crate::chat_service::ChatCompletionService::new(state.router.clone());
     let router = chat_service.snapshot();
-    let (provider, pool, pool_id, default_params) = chat_service.resolve(&router, &model)?;
+    let (provider, pool, pool_id, default_params, upstream_model) =
+        chat_service.resolve(&router, &model)?;
+
+    if let Some(upstream) = upstream_model {
+        req.model = upstream.to_owned();
+    }
 
     if let (Some(serde_json::Value::Object(pm)), serde_json::Value::Object(extra)) =
         (default_params, &mut req.extra)

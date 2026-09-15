@@ -57,9 +57,13 @@ pub struct Message {
 /// Non-streaming chat completion response.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ChatCompletionResponse {
+    #[serde(default)]
     pub id: String,
+    #[serde(default = "default_chat_object")]
     pub object: String,
+    #[serde(default)]
     pub created: u64,
+    #[serde(default)]
     pub model: String,
     pub choices: Vec<Choice>,
     pub usage: Option<Usage>,
@@ -74,6 +78,7 @@ pub struct ChatCompletionResponse {
 /// A single completion choice.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Choice {
+    #[serde(default)]
     pub index: u32,
     pub message: ResponseMessage,
     pub finish_reason: Option<String>,
@@ -82,8 +87,11 @@ pub struct Choice {
 /// The assistant message within a non-streaming choice.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ResponseMessage {
+    #[serde(default = "default_assistant_role")]
     pub role: String,
+    #[serde(default)]
     pub content: Option<String>,
+    #[serde(default)]
     pub tool_calls: Option<Vec<ToolCall>>,
     /// Provider-specific hidden reasoning text, when exposed by the upstream.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -112,9 +120,13 @@ pub struct ToolCallFunction {
 /// A single SSE chunk in a streaming chat completion response.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ChatCompletionChunk {
+    #[serde(default)]
     pub id: String,
+    #[serde(default = "default_chunk_object")]
     pub object: String,
+    #[serde(default)]
     pub created: u64,
+    #[serde(default)]
     pub model: String,
     pub choices: Vec<ChunkChoice>,
     pub usage: Option<Usage>,
@@ -123,6 +135,7 @@ pub struct ChatCompletionChunk {
 /// A single completion choice inside a streaming chunk.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ChunkChoice {
+    #[serde(default)]
     pub index: u32,
     pub delta: Delta,
     pub finish_reason: Option<String>,
@@ -162,9 +175,24 @@ pub struct DeltaToolCallFunction {
 /// Token usage counters returned by the upstream API.
 #[derive(Debug, Default, Clone, Copy, Deserialize, Serialize)]
 pub struct Usage {
+    #[serde(default)]
     pub prompt_tokens: u32,
+    #[serde(default)]
     pub completion_tokens: u32,
+    #[serde(default)]
     pub total_tokens: u32,
+}
+
+fn default_chat_object() -> String {
+    "chat.completion".into()
+}
+
+fn default_chunk_object() -> String {
+    "chat.completion.chunk".into()
+}
+
+fn default_assistant_role() -> String {
+    "assistant".into()
 }
 
 /// A model entry in the `/v1/models` listing.
@@ -286,6 +314,15 @@ mod tests {
         let chunk: ChatCompletionChunk = serde_json::from_str(json).unwrap();
         assert_eq!(chunk.choices[0].delta.content.as_deref(), Some("Hello"));
         assert!(chunk.choices[0].finish_reason.is_none());
+    }
+
+    #[test]
+    fn it_deserializes_response_missing_created() {
+        let json = r#"{"id":"chat-1","object":"chat.completion","model":"glm-5.3-flash","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}"#;
+        let resp: ChatCompletionResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.created, 0);
+        assert_eq!(resp.model, "glm-5.3-flash");
+        assert_eq!(resp.choices[0].message.content.as_deref(), Some("hi"));
     }
 
     #[test]

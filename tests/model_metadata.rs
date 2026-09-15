@@ -4,7 +4,7 @@ use std::sync::Arc;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use llm_proxy::auth::{AuthState, ClientKeyEntry};
-use llm_proxy::config::{KeyEntry, PoolConfig, PoolStrategy};
+use llm_proxy::config::{KeyEntry, PoolConfig};
 use llm_proxy::router::{BadKeyRegistry, Router, RouterHandle};
 use llm_proxy::server::{self, AppState};
 use sqlx::sqlite::SqlitePoolOptions;
@@ -35,7 +35,6 @@ models:
         "pool-a".to_owned(),
         PoolConfig {
             keys: vec![KeyEntry::api_key("upstream-test-key", 1)],
-            strategy: PoolStrategy::WeightedRandom,
         },
     );
     let model_map = models
@@ -43,7 +42,7 @@ models:
         .map(|(model, pool)| {
             (
                 (*model).to_owned(),
-                ((*pool).to_owned(), pools[*pool].clone(), None),
+                ((*pool).to_owned(), pools[*pool].clone(), None, None),
             )
         })
         .collect();
@@ -70,7 +69,6 @@ models:
         metrics: Arc::new(llm_proxy::metrics::Metrics::default()),
         circuit_breaker: Arc::new(llm_proxy::circuit_breaker::CircuitBreaker::with_defaults()),
         concurrency: Arc::new(llm_proxy::concurrency::ConcurrencyLimiter::new(10, 10)),
-        fallback_config: Arc::new(llm_proxy::fallback::FallbackConfig::default()),
         alert_tx,
         error_burst_counters: Arc::new(dashmap::DashMap::new()),
         alert_snapshot: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),

@@ -122,7 +122,7 @@ pub async fn bootstrap(config_path: &str) -> anyhow::Result<BootedApp> {
                     new = report.counts.new,
                     skipped = report.counts.skipped,
                     conflicts = report.counts.conflicts,
-                    "initialized model registry from models-store.json"
+                    "initialized model registry from models.dev catalog"
                 );
                 for reason in report.reasons {
                     tracing::warn!(reason = %reason, "model metadata import skipped an entry");
@@ -183,7 +183,6 @@ pub async fn bootstrap(config_path: &str) -> anyhow::Result<BootedApp> {
         config.concurrency.max_per_tenant,
         config.concurrency.total_max,
     ));
-    let fallback_config = Arc::new(config.fallback_models.clone());
 
     let _db_maint_handle = db_maintenance::spawn_db_maintenance(
         pool.clone(),
@@ -283,7 +282,6 @@ pub async fn bootstrap(config_path: &str) -> anyhow::Result<BootedApp> {
         metrics: Arc::clone(&metrics),
         circuit_breaker: Arc::clone(&circuit_breaker),
         concurrency: Arc::clone(&concurrency),
-        fallback_config: Arc::clone(&fallback_config),
         alert_tx: alert_tx.clone(),
         error_burst_counters: Arc::new(dashmap::DashMap::new()),
         alert_snapshot: alert_snapshot.clone(),

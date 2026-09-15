@@ -99,12 +99,21 @@ pub type ResolveResult<'a> = (
     &'a PoolConfig,
     &'a str,
     Option<&'a serde_json::Value>,
+    Option<&'a str>,
 );
 
 /// Routes model names to provider pool + key selection.
 pub struct Router {
-    /// `model → (pool_id, PoolConfig, default_params)`
-    model_map: HashMap<String, (String, PoolConfig, Option<serde_json::Value>)>,
+    /// `model → (pool_id, PoolConfig, default_params, upstream_model)`
+    model_map: HashMap<
+        String,
+        (
+            String,
+            PoolConfig,
+            Option<serde_json::Value>,
+            Option<String>,
+        ),
+    >,
     /// `pool_id → Arc<dyn Provider>`
     providers: HashMap<String, Arc<dyn Provider>>,
     bad_keys: Arc<BadKeyRegistry>,
@@ -112,7 +121,15 @@ pub struct Router {
 
 impl Router {
     pub fn new(
-        model_map: HashMap<String, (String, PoolConfig, Option<serde_json::Value>)>,
+        model_map: HashMap<
+            String,
+            (
+                String,
+                PoolConfig,
+                Option<serde_json::Value>,
+                Option<String>,
+            ),
+        >,
         providers: HashMap<String, Arc<dyn Provider>>,
         bad_keys: Arc<BadKeyRegistry>,
     ) -> Self {
@@ -125,7 +142,7 @@ impl Router {
 
     /// Look up the provider and pool for a model name.
     pub fn resolve(&self, model: &str) -> Result<ResolveResult<'_>, AppError> {
-        let (pool_id, pool, default_params) = self
+        let (pool_id, pool, default_params, upstream_model) = self
             .model_map
             .get(model)
             .ok_or_else(|| AppError::NotFound(format!("model '{model}' not found")))?;
@@ -138,6 +155,7 @@ impl Router {
             pool,
             pool_id.as_str(),
             default_params.as_ref(),
+            upstream_model.as_deref(),
         ))
     }
 
@@ -198,7 +216,7 @@ impl Router {
         let mut models: Vec<_> = self
             .model_map
             .iter()
-            .map(|(model, (pool, _, _))| (model.clone(), pool.clone()))
+            .map(|(model, (pool, _, _, _))| (model.clone(), pool.clone()))
             .collect();
         models.sort_by(|a, b| a.0.cmp(&b.0));
         models
@@ -208,7 +226,7 @@ impl Router {
     pub fn pool_snapshot(&self) -> Vec<PoolSnapshot> {
         let mut seen = std::collections::HashSet::new();
         let mut snapshots = Vec::new();
-        for (pool_id, pool_cfg, _) in self.model_map.values() {
+        for (pool_id, pool_cfg, _, _) in self.model_map.values() {
             if !seen.insert(pool_id.clone()) {
                 continue;
             }
@@ -296,10 +314,7 @@ mod tests {
             .enumerate()
             .map(|(i, &w)| KeyEntry::api_key(format!("sk-key-{i}"), w))
             .collect();
-        PoolConfig {
-            keys,
-            strategy: crate::config::PoolStrategy::WeightedRandom,
-        }
+        PoolConfig { keys }
     }
 
     fn test_router() -> (Router, Arc<BadKeyRegistry>) {
@@ -409,7 +424,7 @@ mod tests {
         let mut models = HashMap::new();
         models.insert(
             "gpt-4".to_string(),
-            ("pool-a".to_string(), pool_with_weights(&[1]), None),
+            ("pool-a".to_string(), pool_with_weights(&[1]), None, None),
         );
         let new_router = Arc::new(Router::new(
             models,
@@ -419,5 +434,32 @@ mod tests {
         handle.swap(new_router);
 
         assert_eq!(handle.current().model_list(), vec!["gpt-4"]);
+    }
+
+    #[test]
+    fn resolve_returns_upstream_model_alias() {
+        let mut models = HashMap::new();
+        models.insert(
+            "deepseek-v4-flash".to_string(),
+            (
+                "pool-a".to_string(),
+                pool_with_weights(&[1]),
+                None,
+                Some("deepseek-v4-flash-0731".to_string()),
+            ),
+        );
+        let mut providers = HashMap::new();
+        providers.insert(
+            "pool-a".to_string(),
+            Arc::new(crate::provider::openai::OpenAiProvider::new(
+                "test".into(),
+                "https://example.invalid/v1".into(),
+                Arc::from([401u16, 403]),
+            )) as Arc<dyn crate::provider::Provider>,
+        );
+        let router = Router::new(models, providers, Arc::new(BadKeyRegistry::new()));
+        let (_, _, pool_id, _, upstream) = router.resolve("deepseek-v4-flash").unwrap();
+        assert_eq!(pool_id, "pool-a");
+        assert_eq!(upstream, Some("deepseek-v4-flash-0731"));
     }
 }

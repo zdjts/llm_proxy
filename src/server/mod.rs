@@ -35,7 +35,6 @@ pub struct AppState {
     pub metrics: Arc<Metrics>,
     pub circuit_breaker: Arc<CircuitBreaker>,
     pub concurrency: Arc<ConcurrencyLimiter>,
-    pub fallback_config: Arc<crate::fallback::FallbackConfig>,
     pub alert_tx: tokio::sync::broadcast::Sender<AlertEvent>,
     pub error_burst_counters: Arc<DashMap<(String, String), u32>>,
     pub alert_snapshot: AlertSnapshot,
@@ -206,10 +205,6 @@ fn build_admin_routes(state: AppState, allowed_ips: Vec<String>) -> Router<AppSt
         .route(
             "/export",
             axum::routing::get(crate::dashboard::export::export_handler),
-        )
-        .route(
-            "/api/replay/{request_id}",
-            axum::routing::get(crate::dashboard::replay::replay_request),
         )
         // ── v4.0 Track H: Config-as-Data CRUD (T176) ──
         .route(

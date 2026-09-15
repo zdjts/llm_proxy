@@ -101,12 +101,16 @@ impl ModelCatalog {
                         ModelMetadataPricing {
                             input_usd_per_million_tokens: entry.input_price_per_1m.unwrap_or(0.0),
                             output_usd_per_million_tokens: entry.output_price_per_1m.unwrap_or(0.0),
-                            cache_read_usd_per_million_tokens: metadata
-                                .pricing
-                                .cache_read_usd_per_million_tokens,
-                            cache_write_usd_per_million_tokens: metadata
-                                .pricing
-                                .cache_write_usd_per_million_tokens,
+                            cache_read_usd_per_million_tokens: catalog_cost(
+                                caps.as_ref(),
+                                "cache_read",
+                                metadata.pricing.cache_read_usd_per_million_tokens,
+                            ),
+                            cache_write_usd_per_million_tokens: catalog_cost(
+                                caps.as_ref(),
+                                "cache_write",
+                                metadata.pricing.cache_write_usd_per_million_tokens,
+                            ),
                         },
                     )
                 } else {
@@ -191,6 +195,13 @@ fn translate_reasoning_effort(
         );
     }
     Ok(())
+}
+
+fn catalog_cost(caps: Option<&serde_json::Value>, field: &str, fallback: f64) -> f64 {
+    caps.and_then(|value| value.pointer(&format!("/metadata/cost/{field}")))
+        .and_then(serde_json::Value::as_f64)
+        .filter(|n| n.is_finite() && *n >= 0.0)
+        .unwrap_or(fallback)
 }
 
 fn reasoning_thinking_levels(caps: Option<&serde_json::Value>) -> Vec<String> {
