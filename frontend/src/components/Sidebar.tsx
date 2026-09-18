@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { NavLink } from 'react-router-dom';
-import { Activity, BarChart3, Bell, Boxes, DollarSign, HelpCircle, Key, Languages, LayoutDashboard, Server, Settings, Users, X } from 'lucide-react';
+import { BarChart3, Boxes, DollarSign, History, Key, Languages, LayoutDashboard, PieChart, Server, Settings, Users, X } from 'lucide-react';
 import { useLocale } from '@/i18n/context';
 import type { Locale, Messages } from '@/i18n/types';
 
@@ -8,14 +8,14 @@ interface Props { mobileOpen: boolean; onMobileClose: () => void; }
 interface NavItem { to: string; label: string; icon: React.ComponentType<{ size?: number; className?: string }>; section?: string; }
 
 const allNavItems: NavItem[] = [
-  { to: '/console', label: 'overview', icon: LayoutDashboard, section: 'main' }, { to: '/live', label: 'live monitor', icon: Activity, section: 'main' },
+  { to: '/console', label: 'overview', icon: LayoutDashboard, section: 'main' },
   { to: '/config', label: 'config console', icon: Settings, section: 'config' }, { to: '/config/providers', label: 'providers', icon: Server, section: 'config' }, { to: '/config/pools', label: 'key pools', icon: Key, section: 'config' }, { to: '/config/routing', label: 'routing', icon: Boxes, section: 'config' }, { to: '/config/models', label: 'model catalog', icon: Boxes, section: 'config' },
   { to: '/client-keys', label: 'client keys', icon: Users, section: 'admin' },
-  { to: '/cost', label: 'cost', icon: DollarSign, section: 'monitor' }, { to: '/cost/drilldown', label: 'drilldown', icon: BarChart3, section: 'monitor' }, { to: '/requests', label: 'requests', icon: Activity, section: 'monitor' }, { to: '/keys', label: 'key health', icon: Key, section: 'monitor' }, { to: '/traffic', label: 'traffic', icon: BarChart3, section: 'monitor' }, { to: '/alerts', label: 'alerts', icon: Bell, section: 'monitor' },
-  { to: '/settings/system', label: 'system', icon: Settings, section: 'settings' }, { to: '/help', label: 'help', icon: HelpCircle, section: 'main' },
+  { to: '/usage', label: 'usage', icon: PieChart, section: 'monitor' }, { to: '/requests', label: 'request history', icon: History, section: 'monitor' }, { to: '/cost', label: 'cost', icon: DollarSign, section: 'monitor' }, { to: '/cost/drilldown', label: 'drilldown', icon: BarChart3, section: 'monitor' }, { to: '/keys', label: 'key health', icon: Key, section: 'monitor' }, { to: '/traffic', label: 'traffic', icon: BarChart3, section: 'monitor' },
+  { to: '/settings/system', label: 'system', icon: Settings, section: 'settings' },
 ];
 const sectionLabels: Record<string, keyof Messages['sidebar']['sections']> = { main: 'main', config: 'config', monitor: 'monitor', admin: 'admin', settings: 'settings' };
-const itemLabels: Record<string, Exclude<keyof Messages['sidebar'], 'sections'>> = { overview: 'overview', 'live monitor': 'live', providers: 'providers', 'key pools': 'keyPools', routing: 'routing', 'model catalog': 'modelCatalog', 'client keys': 'clientKeys', cost: 'cost', drilldown: 'drilldown', requests: 'requests', 'key health': 'keys', traffic: 'traffic', alerts: 'alerts', system: 'system', help: 'help', 'config console': 'configConsole' };
+const itemLabels: Record<string, Exclude<keyof Messages['sidebar'], 'sections'>> = { overview: 'overview', usage: 'usage', 'request history': 'requests', providers: 'providers', 'key pools': 'keyPools', routing: 'routing', 'model catalog': 'modelCatalog', 'client keys': 'clientKeys', cost: 'cost', drilldown: 'drilldown', 'key health': 'keys', traffic: 'traffic', system: 'system', 'config console': 'configConsole' };
 const focusableSelector = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 export function Sidebar({ mobileOpen, onMobileClose }: Props) {

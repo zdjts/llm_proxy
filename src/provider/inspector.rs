@@ -32,13 +32,24 @@ pub struct StreamInspector {
 
 impl StreamInspector {
     pub fn new() -> Self {
+        Self::new_started_at(Instant::now())
+    }
+
+    /// Inspector whose TTFT clock starts at `start_at` instead of now.
+    ///
+    /// The handler passes the moment the client request arrived so that TTFT
+    /// covers the full client-perceived wait (connection + upstream headers +
+    /// time to first token).  Measuring only from response-header receipt
+    /// yields ~0 ms for upstreams that buffer the entire SSE body and flush
+    /// it at the end of generation.
+    pub fn new_started_at(start_at: Instant) -> Self {
         Self {
             accumulated_usage: None,
             finish_reason: None,
             upstream_model: None,
             raw_usage_json: None,
             first_chunk_at: None,
-            start_at: Instant::now(),
+            start_at,
             reasoning_tokens: 0,
             audio_tokens: 0,
             cache_hit_tokens: None,
@@ -49,6 +60,10 @@ impl StreamInspector {
     /// Time from construction to first ingested chunk in milliseconds.
     /// Returns `None` if no chunks have been ingested yet (or the stream
     /// was empty).  Only meaningful for streaming responses.
+    ///
+    /// With [`StreamInspector::new_started_at`] this measures from the
+    /// supplied start instant (normally client-request arrival), i.e. the
+    /// full client-perceived time-to-first-token.
     pub fn ttft_ms(&self) -> Option<i64> {
         self.first_chunk_at
             .map(|at| at.duration_since(self.start_at).as_millis() as i64)
@@ -182,6 +197,7 @@ impl Default for StreamInspector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn ingest_line(inspector: &mut StreamInspector, line: &str) {
         inspector.ingest_chunk(line.as_bytes());
@@ -242,5 +258,27 @@ mod tests {
         );
         let summary = inspector.finalize();
         assert_eq!(summary.upstream_model.as_deref(), Some("gpt-4o"));
+    }
+
+    #[test]
+    fn it_returns_none_ttft_before_any_chunk() {
+        let inspector = StreamInspector::new();
+        assert!(inspector.ttft_ms().is_none());
+    }
+
+    #[test]
+    fn ttft_measures_from_supplied_start_instant_not_inspection_time() {
+        // Regression: TTFT used to be measured from inspector construction
+        // (after upstream headers arrived). For buffering upstreams that
+        // flush the whole SSE body at generation end, headers and first
+        // chunk arrive in the same millisecond, so ttft_ms was always 0.
+        let started_at = Instant::now() - Duration::from_millis(500);
+        let mut inspector = StreamInspector::new_started_at(started_at);
+        inspector.ingest_chunk(b"data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n");
+        let ttft = inspector.ttft_ms().expect("chunk ingested");
+        assert!(
+            ttft >= 500,
+            "ttft must cover the full client wait, got {ttft}ms"
+        );
     }
 }

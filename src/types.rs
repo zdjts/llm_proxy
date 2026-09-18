@@ -96,6 +96,12 @@ pub struct ResponseMessage {
     /// Provider-specific hidden reasoning text, when exposed by the upstream.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
+    /// Alias used by some OpenAI-compatible proxies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
+    /// Alias used by some OpenAI-compatible proxies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_text: Option<String>,
     /// Provider-specific structured thinking payload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<serde_json::Value>,
@@ -150,6 +156,12 @@ pub struct Delta {
     /// Provider-specific incremental reasoning text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
+    /// Alias used by some OpenAI-compatible proxies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
+    /// Alias used by some OpenAI-compatible proxies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_text: Option<String>,
     /// Provider-specific incremental thinking payload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<serde_json::Value>,

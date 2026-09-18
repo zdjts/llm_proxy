@@ -76,7 +76,6 @@ Mounted at `/admin/` when `admin.enabled: true`. IP-guarded (default: `127.0.0.1
 | `/admin/traffic` | Traffic trend SVG chart |
 | `/admin/alerts` | Recent alert events |
 | `/admin/cost/drilldown` | Per-model cost drilldown |
-| `/admin/help` | RUNBOOK |
 
 Supports `?tenant=` slicing and `?format=csv` where applicable.
 

@@ -16,18 +16,12 @@
 
 pub mod anthropic;
 pub mod anthropic_stream;
-pub mod azure;
-pub mod bedrock;
-pub mod cohere;
 pub mod gemini;
 pub mod gemini_stream;
 pub mod http;
 pub mod inspector;
-pub mod mistral;
-pub mod ollama;
 pub mod openai;
 pub mod registry;
-pub mod vllm;
 
 use async_trait::async_trait;
 use bytes::Bytes;

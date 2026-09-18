@@ -30,10 +30,10 @@ export function StatCard({ label, value, prefix = '', suffix = '', icon: Icon, t
   return <Card className={join('p-4', className)}><div className="flex items-start gap-3"><div className="min-w-0 flex-1"><span className="mb-1.5 block text-xs font-medium text-surface-500">{label}</span><div className="font-operational text-2xl font-bold tracking-tight text-surface-900">{prefix}{typeof value === 'number' ? value.toLocaleString() : value}{suffix}</div>{trend && <div className={join('mt-1 text-xs', trendText)}>{trendLabel}</div>}</div>{Icon && <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-surface-200 bg-surface-50 text-surface-800"><Icon size={18} aria-hidden="true" /></span>}</div></Card>;
 }
 
-export function Modal({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: React.ReactNode }) {
+export function Modal({ open, onClose, title, children, wide }: { open: boolean; onClose: () => void; title: string; children: React.ReactNode; wide?: boolean }) {
   const { t } = useLocale();
   if (!open) return null;
-  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-surface-900/30 p-4 backdrop-blur-sm" role="presentation" onMouseDown={onClose}><div className="w-full max-w-md rounded-2xl border border-surface-200 bg-white p-6 shadow-[0_24px_64px_-28px_rgba(0,0,0,0.38)]" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}><div className="mb-5 flex items-center justify-between gap-4 border-b border-surface-200 pb-4"><h2 className="font-serif text-xl font-bold text-surface-900">{title}</h2><button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-sm text-surface-500 hover:bg-surface-100 hover:text-surface-800" aria-label={t.common.uiClose}>{t.common.uiClose}</button></div>{children}</div></div>;
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-surface-900/30 p-4 backdrop-blur-sm" role="presentation" onMouseDown={onClose}><div className={join('w-full rounded-2xl border border-surface-200 bg-white p-6 shadow-[0_24px_64px_-28px_rgba(0,0,0,0.38)]', wide ? 'max-w-3xl' : 'max-w-md')} role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}><div className="mb-5 flex items-center justify-between gap-4 border-b border-surface-200 pb-4"><h2 className="font-serif text-xl font-bold text-surface-900">{title}</h2><button type="button" onClick={onClose} className="rounded-lg px-2 py-1 text-sm text-surface-500 hover:bg-surface-100 hover:text-surface-800" aria-label={t.common.uiClose}>{t.common.uiClose}</button></div>{children}</div></div>;
 }
 
 export function Skeleton({ className }: { className?: string }) {
@@ -47,7 +47,7 @@ export function EmptyState({ title, description, action, className }: { title: s
 
 export function ErrorState({ title, description, action, className }: { title?: string; description?: string; action?: React.ReactNode; className?: string }) {
   const { t } = useLocale();
-  return <div className={join('flex flex-col items-center justify-center border border-danger-light bg-primary-50 px-6 py-10 text-center', className)}><AlertCircle size={22} className="mb-3 text-danger" aria-hidden="true" /><h3 className="text-sm font-semibold text-danger-dark">{title || t.common.uiUnableToLoad}</h3>{description && <p className="mt-1 max-w-sm text-sm text-surface-600">{description}</p>}{action && <div className="mt-4">{action}</div>}</div>;
+  return <div className={join('flex flex-col items-center justify-center border border-danger-light bg-surface-50 px-6 py-10 text-center', className)}><AlertCircle size={22} className="mb-3 text-danger" aria-hidden="true" /><h3 className="text-sm font-semibold text-danger-dark">{title || t.common.uiUnableToLoad}</h3>{description && <p className="mt-1 max-w-sm text-sm text-surface-600">{description}</p>}{action && <div className="mt-4">{action}</div>}</div>;
 }
 
 export function Badge({ children, variant = 'default', className }: { children: React.ReactNode; variant?: 'default' | 'success' | 'warning' | 'danger' | 'info'; className?: string }) {

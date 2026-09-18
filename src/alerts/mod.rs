@@ -4,7 +4,7 @@
 //! channel. A dedicated background task drains the channel:
 //!   1. SQLite INSERT (fail-open)
 //!   2. Snapshot push (in-memory 1024 cap)
-//!   3. Channel dispatch (webhook/slack/discord/email)
+//!   3. Channel dispatch (webhook/slack/discord)
 
 pub mod channel;
 pub mod db;

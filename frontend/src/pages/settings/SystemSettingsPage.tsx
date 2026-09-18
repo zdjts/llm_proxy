@@ -1,11 +1,11 @@
 import { Card, ErrorState, Skeleton } from '@/components/ui';
 import { useLocale } from '@/i18n/context';
 import { useQuery } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { fetchStatus } from '@/lib/api';
 
 export function SystemSettingsPage() {
   const { t } = useLocale();
-  const { data: status, isLoading, isError, refetch } = useQuery({ queryKey: ['status'], queryFn: () => api.get('/admin/api/status').then(r => r.data) });
+  const { data: status, isLoading, isError, refetch } = useQuery({ queryKey: ['status'], queryFn: fetchStatus });
   if (isLoading) return <div className="space-y-4"><Skeleton className="h-8 w-48" /><Skeleton className="h-48" /></div>;
   if (isError) return <ErrorState action={<button type="button" className="btn-secondary text-xs" onClick={() => refetch()}>{t.adminUi.retry}</button>} />;
   return (

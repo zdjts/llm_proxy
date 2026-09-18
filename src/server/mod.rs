@@ -5,6 +5,7 @@
 
 pub mod handler;
 pub mod middleware;
+pub mod stream_normalize;
 
 use std::sync::Arc;
 
@@ -130,6 +131,10 @@ fn build_admin_routes(state: AppState, allowed_ips: Vec<String>) -> Router<AppSt
             axum::routing::get(crate::dashboard::requests::request_list_handler),
         )
         .route(
+            "/requests/{id}",
+            axum::routing::get(crate::dashboard::requests::request_detail_handler),
+        )
+        .route(
             "/keys",
             axum::routing::get(crate::dashboard::keys::key_health_handler),
         )
@@ -146,16 +151,16 @@ fn build_admin_routes(state: AppState, allowed_ips: Vec<String>) -> Router<AppSt
             axum::routing::get(crate::dashboard::cost_drilldown::cost_drilldown_handler),
         )
         .route(
-            "/help",
-            axum::routing::get(crate::dashboard::help::help_handler),
-        )
-        .route(
             "/api/status",
             axum::routing::get(crate::dashboard::admin_api::admin_api_status),
         )
         .route(
             "/api/keys",
             axum::routing::get(crate::dashboard::admin_api::admin_api_keys),
+        )
+        .route(
+            "/api/usage",
+            axum::routing::get(crate::dashboard::usage::admin_api_usage),
         )
         .route(
             "/api/config",
@@ -197,7 +202,6 @@ fn build_admin_routes(state: AppState, allowed_ips: Vec<String>) -> Router<AppSt
                 .delete(crate::dashboard::admin_api::admin_api_delete_client_key)
                 .post(crate::dashboard::admin_api::admin_api_rotate_client_key),
         )
-        .route("/ws", axum::routing::get(crate::dashboard::ws::ws_handler))
         .route(
             "/live",
             axum::routing::get(crate::dashboard::live::live_handler),
@@ -237,10 +241,6 @@ fn build_admin_routes(state: AppState, allowed_ips: Vec<String>) -> Router<AppSt
         .route(
             "/api/routing/{logical_model}",
             axum::routing::delete(crate::dashboard::admin_api::admin_api_delete_routing),
-        )
-        .route(
-            "/api/config/rollback/{audit_id}",
-            axum::routing::post(crate::dashboard::admin_api::admin_api_rollback_config),
         )
         .route_layer(axum::middleware::from_fn(move |req, next| {
             middleware::ip_guard(req, next, allowed_ips.clone())

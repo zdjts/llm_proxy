@@ -49,7 +49,7 @@ describe('configuration and admin states', () => {
     unmount();
 
     vi.mocked(fetchProviders).mockResolvedValueOnce({ providers: [{ id: 'p1', kind: 'openai', base_url: 'https://example.test', pool_id: 'pool' }] });
-    vi.mocked(deleteProvider).mockResolvedValue({});
+    vi.mocked(deleteProvider).mockResolvedValue(undefined);
     renderPage(<ProviderListPage />);
     const button = await screen.findByRole('button', { name: 'Delete p1' });
     fireEvent.click(button);
@@ -60,7 +60,7 @@ describe('configuration and admin states', () => {
 
   it('masks and clears pool secrets across the create lifecycle', async () => {
     vi.mocked(fetchPools).mockResolvedValue({ pools: [] });
-    vi.mocked(createPool).mockRejectedValueOnce(new Error('failed')).mockResolvedValueOnce({});
+    vi.mocked(createPool).mockRejectedValueOnce(new Error('failed')).mockResolvedValueOnce(undefined);
     renderPage(<PoolListPage />);
 
     fireEvent.click(await screen.findByRole('button', { name: /Add pool/i }));

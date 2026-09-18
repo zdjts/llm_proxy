@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::atomic::Ordering;
 
-use crate::audit_trail;
 use crate::config_store::ConfigStore;
 use crate::error::AppError;
 
@@ -174,12 +173,28 @@ struct ExportFailover {
     max_probe_retries: u32,
 }
 
+/// Mirror of `Config::response_normalization` so a YAML export round-
+/// trip preserves the operator-chosen flag.
+#[derive(Serialize)]
+struct ExportResponseNormalization {
+    strip_think_tags: bool,
+}
+
+impl From<&crate::config::ResponseNormalization> for ExportResponseNormalization {
+    fn from(rn: &crate::config::ResponseNormalization) -> Self {
+        Self {
+            strip_think_tags: rn.strip_think_tags,
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct ExportDocument {
     server: ExportServer,
     auth: ExportAuth,
     db: ExportDb,
     failover: ExportFailover,
+    response_normalization: ExportResponseNormalization,
     providers: Vec<serde_json::Value>,
     pools: std::collections::BTreeMap<String, ExportPool>,
     model_to_pool: std::collections::BTreeMap<String, serde_json::Value>,
@@ -192,12 +207,6 @@ fn provider_kind_to_yaml(kind: &crate::config::ProviderKind) -> &'static str {
         crate::config::ProviderKind::OpenAi => "openai",
         crate::config::ProviderKind::Anthropic => "anthropic",
         crate::config::ProviderKind::Gemini => "gemini",
-        crate::config::ProviderKind::Azure => "azure",
-        crate::config::ProviderKind::Bedrock => "bedrock",
-        crate::config::ProviderKind::Cohere => "cohere",
-        crate::config::ProviderKind::Mistral => "mistral",
-        crate::config::ProviderKind::Ollama => "ollama",
-        crate::config::ProviderKind::Vllm => "vllm",
     }
 }
 
@@ -238,8 +247,6 @@ pub async fn admin_api_config_export(
                 "kind": provider_kind_to_yaml(&provider.kind),
                 "base_url": provider.base_url,
                 "pool_id": provider.pool_id,
-                "api_version": provider.api_version,
-                "region": provider.region,
                 "metadata": provider.metadata,
             })
         })
@@ -272,6 +279,9 @@ pub async fn admin_api_config_export(
             probe_timeout_secs: runtime.probe_timeout_secs,
             max_probe_retries: runtime.max_probe_retries,
         },
+        response_normalization: ExportResponseNormalization::from(
+            &snapshot.runtime.response_normalization,
+        ),
         providers,
         pools,
         model_to_pool,
@@ -353,20 +363,6 @@ pub async fn admin_api_config_import(
     }
     state.config_store.import_yaml(&req.yaml).await?;
     let version = state.config_store.version().await;
-    let _ = audit_trail::record_audit(
-        &state.db,
-        audit_trail::AuditEvent {
-            event_type: "config.import".into(),
-            actor_id: None,
-            actor_ip: None,
-            target_type: "config_store".into(),
-            target_id: version.to_string(),
-            before_json: None,
-            after_json: Some(serde_json::json!({ "version": version })),
-            metadata: Some(serde_json::json!({ "source": "explicit_yaml" })),
-        },
-    )
-    .await;
     Ok(Json(ConfigDocumentResponse {
         ok: true,
         dry_run: false,
@@ -478,18 +474,7 @@ fn validate_model_fields(fields: ModelValidation<'_>) -> Result<(), AppError> {
             "id, display_name and provider_kind are required".into(),
         ));
     }
-    if !matches!(
-        kind,
-        "openai"
-            | "anthropic"
-            | "gemini"
-            | "azure"
-            | "bedrock"
-            | "cohere"
-            | "mistral"
-            | "ollama"
-            | "vllm"
-    ) {
+    if !matches!(kind, "openai" | "anthropic" | "gemini") {
         return Err(AppError::BadRequest("unsupported provider_kind".into()));
     }
     if context <= 0 || output <= 0 {
@@ -635,20 +620,6 @@ pub async fn admin_api_create_model(
         return Err(error);
     }
     let after = get_model(&state.db, &req.id).await?;
-    audit_trail::record_audit(
-        &state.db,
-        audit_trail::AuditEvent {
-            event_type: "model.create".into(),
-            actor_id: None,
-            actor_ip: None,
-            target_type: "model_registry".into(),
-            target_id: req.id,
-            before_json: None,
-            after_json: Some(model_value(&after)),
-            metadata: None,
-        },
-    )
-    .await?;
     state.config_store.refresh_from_db().await?;
     Ok(Json(model_value(&after)))
 }
@@ -696,20 +667,6 @@ pub async fn admin_api_update_model(
     sqlx::query("UPDATE model_registry SET display_name=?1,provider_kind=?2,provider_config_id=?3,supports_vision=?4,supports_tool_calling=?5,supports_json_mode=?6,max_context_tokens=?7,max_output_tokens=?8,input_price_per_1m=?9,output_price_per_1m=?10,capabilities_json=?11,enabled=?12,updated_at=unixepoch('subsec')*1000 WHERE id=?13").bind(display).bind(kind).bind(provider).bind(req.supports_vision.unwrap_or(before.supports_vision != 0) as i32).bind(req.supports_tool_calling.unwrap_or(before.supports_tool_calling != 0) as i32).bind(req.supports_json_mode.unwrap_or(before.supports_json_mode != 0) as i32).bind(context).bind(output).bind(input).bind(out_price).bind(caps).bind(enabled as i32).bind(&id).execute(&state.db).await.map_err(|e|AppError::Internal(format!("update model: {e}")))?;
     ensure_model_routing(&state.db, &id, provider, enabled).await?;
     let after = get_model(&state.db, &id).await?;
-    audit_trail::record_audit(
-        &state.db,
-        audit_trail::AuditEvent {
-            event_type: "model.update".into(),
-            actor_id: None,
-            actor_ip: None,
-            target_type: "model_registry".into(),
-            target_id: id,
-            before_json: Some(model_value(&before)),
-            after_json: Some(model_value(&after)),
-            metadata: None,
-        },
-    )
-    .await?;
     state.config_store.refresh_from_db().await?;
     Ok(Json(model_value(&after)))
 }
@@ -739,25 +696,6 @@ pub async fn admin_api_add_client_key(
         Some(store) => {
             let record = store.add(req)?;
             // ── v3.0 audit trail (Fix 7) ──
-            let _ = audit_trail::record_audit(
-                &state.db,
-                audit_trail::AuditEvent {
-                    event_type: "key.create".into(),
-                    actor_id: None, // populated when RBAC is fully integrated
-                    actor_ip: None,
-                    target_type: "client_key".into(),
-                    target_id: record.key_hash.clone(),
-                    before_json: None,
-                    after_json: Some(
-                        serde_json::to_value(crate::auth_store::ClientKeyPublicRecord::from(
-                            &record,
-                        ))
-                        .unwrap_or_default(),
-                    ),
-                    metadata: None,
-                },
-            )
-            .await;
             Ok(Json(crate::auth_store::ClientKeyPublicRecord::from(
                 &record,
             )))
@@ -788,27 +726,7 @@ pub async fn admin_api_delete_client_key(
 ) -> Result<Json<crate::auth_store::ClientKeyPublicRecord>, AppError> {
     match &state.auth_store {
         Some(store) => {
-            // Snapshot before deletion for audit trail
-            let before = store.get_by_hash(&key_hash);
             let record = store.remove(&key_hash)?;
-            // ── v3.0 audit trail (Fix 7) ──
-            let _ = audit_trail::record_audit(
-                &state.db,
-                audit_trail::AuditEvent {
-                    event_type: "key.delete".into(),
-                    actor_id: None,
-                    actor_ip: None,
-                    target_type: "client_key".into(),
-                    target_id: key_hash.clone(),
-                    before_json: before.as_ref().map(|r| {
-                        serde_json::to_value(crate::auth_store::ClientKeyPublicRecord::from(r))
-                            .unwrap_or_default()
-                    }),
-                    after_json: None,
-                    metadata: None,
-                },
-            )
-            .await;
             Ok(Json(crate::auth_store::ClientKeyPublicRecord::from(
                 &record,
             )))
@@ -826,20 +744,6 @@ pub async fn admin_api_rotate_client_key(
         Some(store) => {
             let record = store.rotate(&key_hash, req)?;
             // ── v3.0 audit trail (Fix 7) ──
-            let _ = audit_trail::record_audit(
-                &state.db,
-                audit_trail::AuditEvent {
-                    event_type: "key.rotate".into(),
-                    actor_id: None,
-                    actor_ip: None,
-                    target_type: "client_key".into(),
-                    target_id: record.key_hash.clone(),
-                    before_json: Some(serde_json::json!({"old_key_hash": &key_hash})),
-                    after_json: Some(serde_json::json!({"new_key_hash": &record.key_hash})),
-                    metadata: None,
-                },
-            )
-            .await;
             Ok(Json(crate::auth_store::ClientKeyPublicRecord::from(
                 &record,
             )))
@@ -874,8 +778,6 @@ pub async fn admin_api_list_providers(
                 "kind": format!("{:?}", p.kind).to_lowercase(),
                 "base_url": p.base_url,
                 "pool_id": p.pool_id,
-                "api_version": p.api_version,
-                "region": p.region,
                 "metadata": p.metadata,
             })
         })
@@ -889,10 +791,6 @@ pub struct CreateProviderRequest {
     pub kind: String,
     pub base_url: String,
     pub pool_id: String,
-    #[serde(default)]
-    pub api_version: Option<String>,
-    #[serde(default)]
-    pub region: Option<String>,
     #[serde(default)]
     pub metadata: serde_json::Value,
 }
@@ -922,36 +820,14 @@ pub async fn admin_api_create_provider(
         )));
     }
 
-    let mut metadata = req.metadata.clone();
+    let metadata = req.metadata.clone();
     if !metadata.is_object() {
         return Err(AppError::BadRequest(
             "provider metadata must be a JSON object".into(),
         ));
     }
-    if let Some(object) = metadata.as_object_mut() {
-        if let Some(value) = &req.api_version {
-            object.insert(
-                "api_version".into(),
-                serde_json::Value::String(value.clone()),
-            );
-        }
-        if let Some(value) = &req.region {
-            object.insert("region".into(), serde_json::Value::String(value.clone()));
-        }
-    }
     let kind = req.kind.to_ascii_lowercase();
-    if !matches!(
-        kind.as_str(),
-        "openai"
-            | "anthropic"
-            | "gemini"
-            | "azure"
-            | "bedrock"
-            | "cohere"
-            | "mistral"
-            | "ollama"
-            | "vllm"
-    ) {
+    if !matches!(kind.as_str(), "openai" | "anthropic" | "gemini") {
         return Err(AppError::BadRequest(format!(
             "unsupported provider kind '{kind}'"
         )));
@@ -983,33 +859,6 @@ pub async fn admin_api_create_provider(
     .await
     .map_err(|e| AppError::Internal(format!("create provider: {e}")))?;
 
-    let _ = audit_trail::record_audit(
-        store.db(),
-        audit_trail::AuditEvent {
-            event_type: "provider.create".into(),
-            actor_id: None,
-            actor_ip: None,
-            target_type: "provider_config".into(),
-            target_id: req.id.clone(),
-            before_json: None,
-            after_json: Some(serde_json::json!({
-                "id": req.id,
-                "kind": kind,
-                "base_url": req.base_url,
-                "pool_id": req.pool_id,
-                "api_version": req.api_version,
-                "region": req.region,
-                "metadata": metadata.as_object().map(|object| object.iter().filter_map(|(key, value)| {
-                    let lower = key.to_ascii_lowercase();
-                    let sensitive = lower.contains("key") || lower.contains("token") || lower.contains("secret") || lower.contains("password") || lower.contains("credential") || lower.contains("authorization");
-                    (!sensitive && value.is_string()).then(|| (key.clone(), value.clone()))
-                }).collect::<std::collections::BTreeMap<_, _>>()).unwrap_or_default(),
-            })),
-            metadata: None,
-        },
-    )
-    .await;
-
     // Trigger immediate cache refresh
     store.refresh_from_db().await?;
 
@@ -1021,45 +870,11 @@ pub async fn admin_api_delete_provider(
     Path(provider_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let store = config_store(&state)?;
-    let before: Option<String> = sqlx::query_scalar("SELECT json_object('id', id, 'kind', kind, 'base_url', base_url, 'pool_id', pool_id, 'metadata', metadata) FROM provider_config WHERE id = ?1")
-        .bind(&provider_id)
-        .fetch_optional(store.db())
-        .await
-        .map_err(|e| AppError::Internal(format!("load provider for audit: {e}")))?;
-
-    let (before, has_sensitive_metadata) = before
-        .and_then(|value| {
-            let mut parsed = serde_json::from_str::<serde_json::Value>(&value).ok()?;
-            if let Some(metadata) = parsed.get("metadata").and_then(|v| v.as_str()) {
-                let metadata = serde_json::from_str(metadata)
-                    .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-                parsed["metadata"] = metadata;
-            }
-            Some(redact_audit_metadata(&parsed))
-        })
-        .map_or((None, false), |(value, sensitive)| (Some(value), sensitive));
     sqlx::query("DELETE FROM provider_config WHERE id = ?1")
         .bind(&provider_id)
         .execute(store.db())
         .await
         .map_err(|e| AppError::Internal(format!("delete provider: {e}")))?;
-
-    let _ = audit_trail::record_audit(
-        store.db(),
-        audit_trail::AuditEvent {
-            event_type: "provider.delete".into(),
-            actor_id: None,
-            actor_ip: None,
-            target_type: "provider_config".into(),
-            target_id: provider_id.clone(),
-            before_json: before,
-            after_json: None,
-            metadata: Some(serde_json::json!({
-                "rollback_restricted": has_sensitive_metadata,
-            })),
-        },
-    )
-    .await;
 
     store.refresh_from_db().await?;
 
@@ -1189,28 +1004,6 @@ pub async fn admin_api_create_pool(
     tx.commit()
         .await
         .map_err(|e| AppError::Internal(format!("commit pool transaction: {e}")))?;
-    let after = serde_json::json!({
-        "id": req.id,
-        "strategy": req.strategy,
-        "keys": req.keys.iter().map(|k| serde_json::json!({
-            "key_hash": k.to_key_entry().identity_hash(),
-            "weight": k.weight,
-        })).collect::<Vec<_>>(),
-    });
-    let _ = audit_trail::record_audit(
-        store.db(),
-        audit_trail::AuditEvent {
-            event_type: "pool.create".into(),
-            actor_id: None,
-            actor_ip: None,
-            target_type: "key_pool".into(),
-            target_id: req.id.clone(),
-            before_json: Some(serde_json::json!({"id": req.id})),
-            after_json: Some(after),
-            metadata: None,
-        },
-    )
-    .await;
     store.refresh_from_db().await?;
     Ok(Json(serde_json::json!({"ok": true, "id": req.id})))
 }
@@ -1271,9 +1064,6 @@ pub async fn admin_api_delete_pool(
     Path(pool_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let store = config_store(&state)?;
-    let before: Option<String> = sqlx::query_scalar("SELECT json_object('id', id, 'strategy', strategy, 'keys', (SELECT json_group_array(json_object('key_hash', key_hash, 'weight', weight)) FROM key_entry WHERE pool_id = key_pool.id)) FROM key_pool WHERE id = ?1")
-        .bind(&pool_id)
-        .fetch_optional(store.db()).await.map_err(|e| AppError::Internal(format!("load pool for audit: {e}")))?;
     let mut tx = store
         .db()
         .begin()
@@ -1292,21 +1082,6 @@ pub async fn admin_api_delete_pool(
     tx.commit()
         .await
         .map_err(|e| AppError::Internal(format!("commit pool delete transaction: {e}")))?;
-    let before = before.and_then(|v| serde_json::from_str(&v).ok());
-    let _ = audit_trail::record_audit(
-        store.db(),
-        audit_trail::AuditEvent {
-            event_type: "pool.delete".into(),
-            actor_id: None,
-            actor_ip: None,
-            target_type: "key_pool".into(),
-            target_id: pool_id.clone(),
-            before_json: before,
-            after_json: None,
-            metadata: None,
-        },
-    )
-    .await;
     store.refresh_from_db().await?;
     Ok(Json(serde_json::json!({"ok": true, "deleted": pool_id})))
 }
@@ -1381,21 +1156,6 @@ pub async fn admin_api_create_routing(
     .await
     .map_err(|e| AppError::Internal(format!("create routing: {e}")))?;
 
-    let _ = audit_trail::record_audit(
-        store.db(),
-        audit_trail::AuditEvent {
-            event_type: "routing.create".into(),
-            actor_id: None,
-            actor_ip: None,
-            target_type: "routing_config".into(),
-            target_id: req.logical_model.clone(),
-            before_json: None,
-            after_json: Some(serde_json::to_value(&req).unwrap_or_default()),
-            metadata: None,
-        },
-    )
-    .await;
-
     store.refresh_from_db().await?;
 
     Ok(Json(
@@ -1408,237 +1168,15 @@ pub async fn admin_api_delete_routing(
     Path(logical_model): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let store = config_store(&state)?;
-    let before: Option<String> = sqlx::query_scalar("SELECT json_object('logical_model', logical_model, 'pool_id', pool_id, 'default_params', default_params, 'upstream_model', upstream_model) FROM routing_config WHERE logical_model = ?1")
-        .bind(&logical_model).fetch_optional(store.db()).await
-        .map_err(|e| AppError::Internal(format!("load routing for audit: {e}")))?;
-
-    let before = before.and_then(|value| serde_json::from_str(&value).ok());
-
     sqlx::query("DELETE FROM routing_config WHERE logical_model = ?1")
         .bind(&logical_model)
         .execute(store.db())
         .await
         .map_err(|e| AppError::Internal(format!("delete routing: {e}")))?;
 
-    let _ = audit_trail::record_audit(
-        store.db(),
-        audit_trail::AuditEvent {
-            event_type: "routing.delete".into(),
-            actor_id: None,
-            actor_ip: None,
-            target_type: "routing_config".into(),
-            target_id: logical_model.clone(),
-            before_json: before,
-            after_json: None,
-            metadata: None,
-        },
-    )
-    .await;
-
     store.refresh_from_db().await?;
 
     Ok(Json(
         serde_json::json!({"ok": true, "deleted": logical_model}),
-    ))
-}
-
-fn redact_audit_metadata(value: &serde_json::Value) -> (serde_json::Value, bool) {
-    let Some(object) = value.as_object() else {
-        return (value.clone(), false);
-    };
-    let mut redacted = serde_json::Map::new();
-    let mut sensitive = false;
-    for (key, value) in object {
-        let lower = key.to_ascii_lowercase();
-        let is_sensitive = lower.contains("key")
-            || lower.contains("token")
-            || lower.contains("secret")
-            || lower.contains("password")
-            || lower.contains("credential")
-            || lower.contains("authorization");
-        if is_sensitive {
-            redacted.insert(key.clone(), serde_json::Value::String("[REDACTED]".into()));
-            sensitive = true;
-        } else {
-            let (clean, nested_sensitive) = redact_audit_metadata(value);
-            redacted.insert(key.clone(), clean);
-            sensitive |= nested_sensitive;
-        }
-    }
-    (serde_json::Value::Object(redacted), sensitive)
-}
-
-fn contains_redacted(value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::String(value) => value == "[REDACTED]",
-        serde_json::Value::Array(values) => values.iter().any(contains_redacted),
-        serde_json::Value::Object(values) => values.values().any(contains_redacted),
-        _ => false,
-    }
-}
-pub async fn admin_api_rollback_config(
-    State(state): State<crate::server::AppState>,
-    Path(audit_id): Path<String>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let store = config_store(&state)?;
-
-    let event: Option<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT event_type, target_type, before_json, after_json FROM audit_trail WHERE id = ?1",
-    )
-    .bind(&audit_id)
-    .fetch_optional(store.db())
-    .await
-    .map_err(|e| AppError::Internal(format!("lookup audit: {e}")))?;
-
-    let (event_type, target_type, before_json, after_json) =
-        event.ok_or_else(|| AppError::NotFound(format!("audit event {audit_id} not found")))?;
-
-    let before = before_json
-        .or(after_json)
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(serde_json::Value::Null);
-
-    let rollback_restricted = before
-        .get("metadata")
-        .and_then(|metadata| metadata.get("rollback_restricted"))
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    match (target_type.as_str(), event_type.as_str()) {
-        ("provider_config", "provider.create") | ("provider_config", "provider.update") => {
-            if let Some(id) = before.get("id").and_then(|v| v.as_str()) {
-                sqlx::query("DELETE FROM provider_config WHERE id = ?1")
-                    .bind(id)
-                    .execute(store.db())
-                    .await
-                    .map_err(|e| AppError::Internal(format!("rollback provider: {e}")))?;
-            }
-        }
-        ("provider_config", "provider.delete") => {
-            if rollback_restricted || before.get("metadata").is_some_and(contains_redacted) {
-                return Err(AppError::Config(
-                    "provider rollback unavailable because audit data contains redacted credentials".into(),
-                ));
-            }
-            if let (Some(id), Some(kind), Some(base_url), Some(pool_id)) = (
-                before.get("id").and_then(|v| v.as_str()),
-                before.get("kind").and_then(|v| v.as_str()),
-                before.get("base_url").and_then(|v| v.as_str()),
-                before.get("pool_id").and_then(|v| v.as_str()),
-            ) {
-                sqlx::query("INSERT OR REPLACE INTO provider_config (id, kind, base_url, pool_id, metadata) VALUES (?1, ?2, ?3, ?4, ?5)")
-                    .bind(id).bind(kind).bind(base_url).bind(pool_id)
-                    .bind(
-                        before
-                            .get("metadata")
-                            .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "{}".into()))
-                            .unwrap_or_else(|| "{}".into()),
-                    )
-                .execute(store.db())
-                .await
-                .map_err(|e| AppError::Internal(format!("rollback provider: {e}")))?;
-            }
-        }
-        // ── AUDIT-16 Fix: key_pool rollback ──
-        ("key_pool", "pool.create") => {
-            if let Some(id) = before.get("id").and_then(|v| v.as_str()) {
-                sqlx::query("DELETE FROM key_entry WHERE pool_id = ?1")
-                    .bind(id)
-                    .execute(store.db())
-                    .await
-                    .map_err(|e| AppError::Internal(format!("rollback pool keys: {e}")))?;
-                sqlx::query("DELETE FROM key_pool WHERE id = ?1")
-                    .bind(id)
-                    .execute(store.db())
-                    .await
-                    .map_err(|e| AppError::Internal(format!("rollback pool: {e}")))?;
-            }
-        }
-        ("key_pool", "pool.delete") => {
-            if let (Some(id), Some(strategy), Some(keys)) = (
-                before.get("id").and_then(|v| v.as_str()),
-                before.get("strategy").and_then(|v| v.as_str()),
-                before.get("keys").and_then(|v| v.as_array()),
-            ) {
-                if !keys.is_empty() {
-                    let key_hash = keys[0]
-                        .get("key_hash")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown");
-                    return Err(AppError::Config(format!(
-                        "pool rollback cannot restore key material for {key_hash}"
-                    )));
-                }
-                sqlx::query("INSERT OR REPLACE INTO key_pool (id, strategy) VALUES (?1, ?2)")
-                    .bind(id)
-                    .bind(strategy)
-                    .execute(store.db())
-                    .await
-                    .map_err(|e| AppError::Internal(format!("rollback pool: {e}")))?;
-            }
-        }
-        // ── AUDIT-16 Fix: routing_config rollback ──
-        ("routing_config", "routing.create") => {
-            if let Some(model) = before.get("logical_model").and_then(|v| v.as_str()) {
-                sqlx::query("DELETE FROM routing_config WHERE logical_model = ?1")
-                    .bind(model)
-                    .execute(store.db())
-                    .await
-                    .map_err(|e| AppError::Internal(format!("rollback routing: {e}")))?;
-            }
-        }
-        ("routing_config", "routing.delete") => {
-            if let (Some(model), Some(pool_id)) = (
-                before.get("logical_model").and_then(|v| v.as_str()),
-                before.get("pool_id").and_then(|v| v.as_str()),
-            ) {
-                let default_params = before.get("default_params").cloned();
-                let params_str = default_params
-                    .as_ref()
-                    .filter(|v| !v.is_null())
-                    .and_then(|v| serde_json::to_string(v).ok());
-                let upstream_model = before.get("upstream_model").and_then(|v| v.as_str());
-                sqlx::query(
-                    "INSERT OR REPLACE INTO routing_config (logical_model, pool_id, default_params, upstream_model, enabled) VALUES (?1, ?2, ?3, ?4, 1)",
-                )
-                .bind(model)
-                .bind(pool_id)
-                .bind(params_str.as_deref())
-                .bind(upstream_model)
-                .execute(store.db())
-                .await
-                .map_err(|e| AppError::Internal(format!("rollback routing: {e}")))?;
-            }
-        }
-        ("key_pool", _) | ("routing_config", _) => {
-            return Err(AppError::Config(format!(
-                "rollback not supported for event type {event_type} on {target_type}"
-            )));
-        }
-        _ => {
-            return Err(AppError::Config(format!(
-                "unknown target type for rollback: {target_type}"
-            )));
-        }
-    }
-
-    let _ = audit_trail::record_audit(
-        store.db(),
-        audit_trail::AuditEvent {
-            event_type: "config.rollback".into(),
-            actor_id: None,
-            actor_ip: None,
-            target_type: target_type.clone(),
-            target_id: audit_id.clone(),
-            before_json: Some(serde_json::json!({"rolled_back_audit_id": &audit_id})),
-            after_json: None,
-            metadata: None,
-        },
-    )
-    .await;
-
-    store.refresh_from_db().await?;
-
-    Ok(Json(
-        serde_json::json!({"ok": true, "rolled_back": audit_id}),
     ))
 }

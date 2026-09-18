@@ -1,7 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { fetchKeys } from '@/lib/api';
 import { ShieldCheck, ShieldX, Activity } from 'lucide-react';
-import { motion } from 'framer-motion';
 import { useLocale } from '@/i18n/context';
 import { EmptyState, ErrorState, Skeleton } from '@/components/ui';
 
@@ -56,12 +55,10 @@ export function KeysPage() {
 
             <div className="grid gap-2" role="list">
               {pool.keys.map((key, idx) => (
-                <motion.div
+                <div
                   key={key.key_hash}
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: idx * 0.03 }}
-                  className="flex items-center gap-4 border-t border-surface-100 p-3.5 transition-colors first:border-t-0 hover:bg-surface-50"
+                  style={{ animationDelay: `${Math.min(idx, 20) * 30}ms` }}
+                  className="rise flex items-center gap-4 border-t border-surface-100 p-3.5 transition-colors first:border-t-0 hover:bg-surface-50"
                 >
                   {key.healthy ? (
                     <ShieldCheck size={18} className="shrink-0 text-surface-800" />
@@ -88,7 +85,7 @@ export function KeysPage() {
                     <div className="text-xs text-surface-400">{t.keys.weight.replace('{weight}', String(key.weight))}</div>
                     <div className="font-operational text-xs font-medium text-surface-700">{key.success_rate}</div>
                   </div>
-                </motion.div>
+                </div>
               ))}
             </div>
           </div>

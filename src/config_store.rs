@@ -20,7 +20,7 @@ use tracing;
 
 use crate::config::{
     AlertConfig, CredentialType, FailoverConfig, KeyEntry, ModelMetadataConfig, ModelRouting,
-    PoolConfig, ProviderConfig, ProviderKind,
+    PoolConfig, ProviderConfig, ProviderKind, ResponseNormalization,
 };
 use crate::error::AppError;
 
@@ -80,6 +80,7 @@ pub struct RuntimePolicy {
     pub failover: FailoverConfig,
     pub alerts: AlertConfig,
     pub cache_max_entries: usize,
+    pub response_normalization: ResponseNormalization,
 }
 
 impl Default for RuntimePolicy {
@@ -95,6 +96,7 @@ impl Default for RuntimePolicy {
             },
             alerts: AlertConfig::default(),
             cache_max_entries: 256,
+            response_normalization: ResponseNormalization::default(),
         }
     }
 }
@@ -171,6 +173,19 @@ impl ConfigStore {
         self.inner.read().await.runtime.clone()
     }
 
+    /// Convenience accessor for the normalisation policy that lives
+    /// inside [`RuntimePolicy`].  Kept as a method so handler code does
+    /// not have to walk the runtime snapshot itself; the snapshot is
+    /// still the authoritative carrier.
+    pub async fn response_normalization(&self) -> crate::config::ResponseNormalization {
+        self.inner
+            .read()
+            .await
+            .runtime
+            .response_normalization
+            .clone()
+    }
+
     ///
     /// Restarting the process must not overwrite administrator changes in the
     /// database with values from a YAML file.
@@ -236,17 +251,6 @@ impl ConfigStore {
             let mut metadata = provider.metadata.clone();
             if !metadata.is_object() {
                 metadata = serde_json::json!({});
-            }
-            if let Some(object) = metadata.as_object_mut() {
-                if let Some(api_version) = &provider.api_version {
-                    object.insert(
-                        "api_version".into(),
-                        serde_json::Value::String(api_version.clone()),
-                    );
-                }
-                if let Some(region) = &provider.region {
-                    object.insert("region".into(), serde_json::Value::String(region.clone()));
-                }
             }
             sqlx::query("INSERT INTO provider_config (id, kind, base_url, pool_id, enabled, metadata) VALUES (?1, ?2, ?3, ?4, 1, ?5)")
                 .bind(&provider.id).bind(provider_kind_to_str(&provider.kind)).bind(&provider.base_url)
@@ -367,21 +371,11 @@ impl ConfigStore {
                     .metadata
                     .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
                     .unwrap_or_else(|| serde_json::json!({}));
-                let api_version = metadata
-                    .get("api_version")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned);
-                let region = metadata
-                    .get("region")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned);
                 Ok(ProviderConfig {
                     id: r.id,
                     kind: str_to_provider_kind(&r.kind)?,
                     base_url: r.base_url,
                     pool_id: r.pool_id,
-                    api_version,
-                    region,
                     metadata,
                 })
             })
@@ -596,12 +590,6 @@ fn provider_kind_to_str(kind: &ProviderKind) -> &'static str {
         ProviderKind::OpenAi => "openai",
         ProviderKind::Anthropic => "anthropic",
         ProviderKind::Gemini => "gemini",
-        ProviderKind::Azure => "azure",
-        ProviderKind::Bedrock => "bedrock",
-        ProviderKind::Cohere => "cohere",
-        ProviderKind::Mistral => "mistral",
-        ProviderKind::Ollama => "ollama",
-        ProviderKind::Vllm => "vllm",
     }
 }
 
@@ -610,12 +598,6 @@ fn str_to_provider_kind(s: &str) -> Result<ProviderKind, AppError> {
         "openai" | "open_ai" => Ok(ProviderKind::OpenAi),
         "anthropic" => Ok(ProviderKind::Anthropic),
         "gemini" => Ok(ProviderKind::Gemini),
-        "azure" => Ok(ProviderKind::Azure),
-        "bedrock" => Ok(ProviderKind::Bedrock),
-        "cohere" => Ok(ProviderKind::Cohere),
-        "mistral" => Ok(ProviderKind::Mistral),
-        "ollama" => Ok(ProviderKind::Ollama),
-        "vllm" => Ok(ProviderKind::Vllm),
         other => Err(AppError::Config(format!(
             "Unsupported provider kind '{other}'"
         ))),
@@ -709,41 +691,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count.0, before.providers.len() as i64);
-    }
-    #[tokio::test]
-    async fn import_and_reload_preserve_provider_specific_parameters() {
-        let (pool, _dir) = setup_test_db().await;
-        let store = ConfigStore::load(pool.clone()).await.unwrap();
-        let yaml = "server:\n  host: 127.0.0.1\n  port: 4000\nauth:\n  client_keys: []\ndb:\n  path: ./test.db\nfailover:\n  enabled: true\npools:\n  shared:\n    keys:\n      - key: sk-provider-test\n        weight: 1\nproviders:\n  - id: azure-east\n    kind: azure\n    pool_id: shared\n    base_url: https://azure.example/v1\n    api_version: 2024-02-01\n  - id: bedrock-west\n    kind: bedrock\n    pool_id: shared\n    base_url: https://bedrock.example\n    region: us-west-2\nmodel_to_pool:\n  test-model: shared\n";
-        store.import_yaml(yaml).await.unwrap();
-        let snapshot = store.snapshot().await;
-        let azure = snapshot
-            .providers
-            .iter()
-            .find(|p| p.id == "azure-east")
-            .unwrap();
-        let bedrock = snapshot
-            .providers
-            .iter()
-            .find(|p| p.id == "bedrock-west")
-            .unwrap();
-        assert_eq!(azure.api_version.as_deref(), Some("2024-02-01"));
-        assert_eq!(bedrock.region.as_deref(), Some("us-west-2"));
-
-        let reloaded = ConfigStore::load(pool).await.unwrap();
-        let snapshot = reloaded.snapshot().await;
-        let azure = snapshot
-            .providers
-            .iter()
-            .find(|p| p.id == "azure-east")
-            .unwrap();
-        let bedrock = snapshot
-            .providers
-            .iter()
-            .find(|p| p.id == "bedrock-west")
-            .unwrap();
-        assert_eq!(azure.api_version.as_deref(), Some("2024-02-01"));
-        assert_eq!(bedrock.region.as_deref(), Some("us-west-2"));
     }
     #[tokio::test]
     async fn it_refreshes_from_db_after_write() {

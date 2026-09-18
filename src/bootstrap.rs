@@ -60,12 +60,6 @@ pub async fn bootstrap(config_path: &str) -> anyhow::Result<BootedApp> {
     registry.register(Arc::new(OpenAiFactory));
     registry.register(Arc::new(AnthropicFactory));
     registry.register(Arc::new(GeminiFactory));
-    registry.register(Arc::new(AzureFactory));
-    registry.register(Arc::new(BedrockFactory));
-    registry.register(Arc::new(CohereFactory));
-    registry.register(Arc::new(MistralFactory));
-    registry.register(Arc::new(OllamaFactory));
-    registry.register(Arc::new(VllmFactory));
 
     let bad_status_codes: Arc<[u16]> =
         Arc::from(config.failover.bad_status_codes.clone().into_boxed_slice());
@@ -107,8 +101,13 @@ pub async fn bootstrap(config_path: &str) -> anyhow::Result<BootedApp> {
             failover: config.failover.clone(),
             alerts: config.alerts.clone(),
             cache_max_entries: config.cache_max_entries,
+            response_normalization: config.response_normalization.clone(),
         })
         .await;
+    tracing::info!(
+        strip_think_tags = config.response_normalization.strip_think_tags,
+        "response normalisation policy loaded from YAML"
+    );
 
     let missing_registry_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM routing_config r LEFT JOIN model_registry m ON m.id = r.logical_model AND m.enabled = 1 WHERE r.enabled = 1 AND m.id IS NULL",
@@ -242,12 +241,6 @@ pub async fn bootstrap(config_path: &str) -> anyhow::Result<BootedApp> {
         if config.alerts.channels.discord.enabled {
             channels.push(Arc::new(crate::alerts::channel::DiscordChannel {
                 url: config.alerts.channels.discord.url.clone(),
-            }));
-        }
-
-        if config.alerts.channels.email.enabled {
-            channels.push(Arc::new(crate::alerts::channel::EmailChannel {
-                to: config.alerts.channels.email.to.clone(),
             }));
         }
 
@@ -443,171 +436,5 @@ impl crate::provider::registry::ProviderFactory for GeminiFactory {
 
     fn supports(&self, kind: &ProviderKind) -> bool {
         matches!(kind, ProviderKind::Gemini)
-    }
-}
-
-struct AzureFactory;
-
-#[async_trait::async_trait]
-impl crate::provider::registry::ProviderFactory for AzureFactory {
-    fn kind_name(&self) -> &str {
-        "azure"
-    }
-
-    async fn create(
-        &self,
-        config: &crate::config::ProviderConfig,
-        bad_status_codes: Arc<[u16]>,
-    ) -> Result<Arc<dyn crate::provider::Provider>, crate::error::AppError> {
-        use crate::provider::azure::AzureProvider;
-        let api_version = config
-            .api_version
-            .clone()
-            .unwrap_or_else(|| "2024-06-01".to_string());
-        Ok(Arc::new(AzureProvider::new(
-            config.id.clone(),
-            config.base_url.clone(),
-            api_version,
-            bad_status_codes,
-        )))
-    }
-
-    fn supports(&self, kind: &ProviderKind) -> bool {
-        matches!(kind, ProviderKind::Azure)
-    }
-}
-
-struct BedrockFactory;
-
-#[async_trait::async_trait]
-impl crate::provider::registry::ProviderFactory for BedrockFactory {
-    fn kind_name(&self) -> &str {
-        "bedrock"
-    }
-
-    async fn create(
-        &self,
-        config: &crate::config::ProviderConfig,
-        bad_status_codes: Arc<[u16]>,
-    ) -> Result<Arc<dyn crate::provider::Provider>, crate::error::AppError> {
-        use crate::provider::bedrock::BedrockProvider;
-        let region = config
-            .region
-            .clone()
-            .unwrap_or_else(|| "us-east-1".to_string());
-        Ok(Arc::new(BedrockProvider::new(
-            config.id.clone(),
-            config.base_url.clone(),
-            region,
-            bad_status_codes,
-        )))
-    }
-
-    fn supports(&self, kind: &ProviderKind) -> bool {
-        matches!(kind, ProviderKind::Bedrock)
-    }
-}
-
-struct CohereFactory;
-
-#[async_trait::async_trait]
-impl crate::provider::registry::ProviderFactory for CohereFactory {
-    fn kind_name(&self) -> &str {
-        "cohere"
-    }
-
-    async fn create(
-        &self,
-        config: &crate::config::ProviderConfig,
-        bad_status_codes: Arc<[u16]>,
-    ) -> Result<Arc<dyn crate::provider::Provider>, crate::error::AppError> {
-        use crate::provider::cohere::CohereProvider;
-        Ok(Arc::new(CohereProvider::new(
-            config.id.clone(),
-            config.base_url.clone(),
-            bad_status_codes,
-        )))
-    }
-
-    fn supports(&self, kind: &ProviderKind) -> bool {
-        matches!(kind, ProviderKind::Cohere)
-    }
-}
-
-struct MistralFactory;
-
-#[async_trait::async_trait]
-impl crate::provider::registry::ProviderFactory for MistralFactory {
-    fn kind_name(&self) -> &str {
-        "mistral"
-    }
-
-    async fn create(
-        &self,
-        config: &crate::config::ProviderConfig,
-        bad_status_codes: Arc<[u16]>,
-    ) -> Result<Arc<dyn crate::provider::Provider>, crate::error::AppError> {
-        use crate::provider::mistral::MistralProvider;
-        Ok(Arc::new(MistralProvider::new(
-            config.id.clone(),
-            config.base_url.clone(),
-            bad_status_codes,
-        )))
-    }
-
-    fn supports(&self, kind: &ProviderKind) -> bool {
-        matches!(kind, ProviderKind::Mistral)
-    }
-}
-
-struct OllamaFactory;
-
-#[async_trait::async_trait]
-impl crate::provider::registry::ProviderFactory for OllamaFactory {
-    fn kind_name(&self) -> &str {
-        "ollama"
-    }
-
-    async fn create(
-        &self,
-        config: &crate::config::ProviderConfig,
-        bad_status_codes: Arc<[u16]>,
-    ) -> Result<Arc<dyn crate::provider::Provider>, crate::error::AppError> {
-        use crate::provider::ollama::OllamaProvider;
-        Ok(Arc::new(OllamaProvider::new(
-            config.id.clone(),
-            config.base_url.clone(),
-            bad_status_codes,
-        )))
-    }
-
-    fn supports(&self, kind: &ProviderKind) -> bool {
-        matches!(kind, ProviderKind::Ollama)
-    }
-}
-
-struct VllmFactory;
-
-#[async_trait::async_trait]
-impl crate::provider::registry::ProviderFactory for VllmFactory {
-    fn kind_name(&self) -> &str {
-        "vllm"
-    }
-
-    async fn create(
-        &self,
-        config: &crate::config::ProviderConfig,
-        bad_status_codes: Arc<[u16]>,
-    ) -> Result<Arc<dyn crate::provider::Provider>, crate::error::AppError> {
-        use crate::provider::vllm::VllmProvider;
-        Ok(Arc::new(VllmProvider::new(
-            config.id.clone(),
-            config.base_url.clone(),
-            bad_status_codes,
-        )))
-    }
-
-    fn supports(&self, kind: &ProviderKind) -> bool {
-        matches!(kind, ProviderKind::Vllm)
     }
 }

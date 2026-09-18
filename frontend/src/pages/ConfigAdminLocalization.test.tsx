@@ -6,7 +6,7 @@ import { LocaleProvider } from '@/i18n/context';
 import { SystemSettingsPage } from './settings/SystemSettingsPage';
 
 const get = vi.fn();
-vi.mock('@/lib/api', () => ({ api: { get: (...args: unknown[]) => get(...args) } }));
+vi.mock('@/lib/api', () => ({ fetchStatus: (...args: unknown[]) => get(...args) }));
 
 function renderLocale(page: React.ReactNode, locale: 'en' | 'zh-CN') {
   localStorage.setItem('dashboard-locale', locale);
@@ -19,18 +19,16 @@ describe('configuration admin localization', () => {
     localStorage.clear();
     get.mockReset();
     get.mockResolvedValue({
-      data: {
-        uptime_secs: 1,
-        requests_total: 2,
-        requests_failed: 0,
-        cache_hits: 0,
-        active_connections: 0,
-        retries: 0,
-        key_demotions: 0,
-        upstream_5xx: 0,
-        upstream_4xx: 0,
-        alert_count: 0,
-      },
+      uptime_secs: 1,
+      requests_total: 2,
+      requests_failed: 0,
+      cache_hits: 0,
+      active_connections: 0,
+      retries: 0,
+      key_demotions: 0,
+      upstream_5xx: 0,
+      upstream_4xx: 0,
+      alert_count: 0,
     });
   });
 

@@ -52,6 +52,11 @@ pub struct Config {
     pub alerts: AlertConfig,
     #[serde(default)]
     pub concurrency: ConcurrencyConfig,
+    /// Optional response normalisation: folds provider reasoning aliases
+    /// into OpenAI `reasoning_content` (and strips inlined `<think>`
+    /// blocks as a fallback) so clients such as pi can fold CoT.
+    #[serde(default)]
+    pub response_normalization: ResponseNormalization,
 }
 
 /// HTTP server bind settings.
@@ -135,12 +140,6 @@ pub enum ProviderKind {
     OpenAi,
     Anthropic,
     Gemini,
-    Azure,
-    Bedrock,
-    Cohere,
-    Mistral,
-    Ollama,
-    Vllm,
 }
 
 fn default_kind() -> ProviderKind {
@@ -262,12 +261,6 @@ pub struct ProviderConfig {
     /// Provider kind for dispatch. Defaults to `openai`.
     #[serde(default = "default_kind")]
     pub kind: ProviderKind,
-    /// Azure API version (Azure only).
-    #[serde(default)]
-    pub api_version: Option<String>,
-    /// AWS region (Bedrock only).
-    #[serde(default)]
-    pub region: Option<String>,
     /// Arbitrary provider-specific metadata (JSON).
     #[serde(default)]
     pub metadata: serde_json::Value,
@@ -595,8 +588,6 @@ pub struct ChannelsConfig {
     pub slack: ChannelDef,
     #[serde(default)]
     pub discord: ChannelDef,
-    #[serde(default)]
-    pub email: EmailDef,
 }
 
 /// Single channel definition.
@@ -608,21 +599,25 @@ pub struct ChannelDef {
     pub url: String,
 }
 
-/// Email channel has `to` field instead of `url`.
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct EmailDef {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub to: String,
-}
-
 fn default_min_error_burst() -> u32 {
     3
 }
 
 fn default_min_latency_ms() -> u64 {
     30_000
+}
+
+/// Response normalisation: fold provider reasoning aliases into OpenAI
+/// `reasoning_content`, and as a fallback pull inlined `<think>` /
+/// `<thinking>` blocks out of `content`.
+///
+/// Off by default (`strip_think_tags: false`) so unmodified upstreams
+/// pass through byte-for-byte.  Tag pairs are not configurable — the
+/// processor only recognises the two common wrappers.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResponseNormalization {
+    #[serde(default)]
+    pub strip_think_tags: bool,
 }
 
 impl Config {
@@ -1063,5 +1058,49 @@ models:
         assert_eq!(got.pricing.input_usd_per_million_tokens, 1.0);
         assert_eq!(got.pricing.output_usd_per_million_tokens, 3.0);
         assert_eq!(got.pricing.cache_read_usd_per_million_tokens, 4.0);
+    }
+
+    #[test]
+    fn response_normalization_defaults_to_disabled() {
+        let yaml = r#"
+server: { host: "0.0.0.0", port: 8080 }
+auth: { client_keys: [{ key: "sk-test" }] }
+db: { path: "./test.db" }
+failover: { enabled: true }
+pools:
+  test_pool:
+    keys: [{ key: "sk-aaa", weight: 1 }]
+providers:
+  - id: test
+    pool_id: test_pool
+    base_url: "https://api.test.com/v1"
+model_to_pool: { "test-model": test_pool }
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert!(!config.response_normalization.strip_think_tags);
+    }
+
+    #[test]
+    fn response_normalization_parses_enabled_flag() {
+        let yaml = r#"
+server: { host: "0.0.0.0", port: 8080 }
+auth: { client_keys: [{ key: "sk-test" }] }
+db: { path: "./test.db" }
+failover: { enabled: true }
+pools:
+  test_pool:
+    keys: [{ key: "sk-aaa", weight: 1 }]
+providers:
+  - id: test
+    pool_id: test_pool
+    base_url: "https://api.test.com/v1"
+model_to_pool: { "test-model": test_pool }
+response_normalization:
+  strip_think_tags: true
+  think_tag_pairs:
+    - ["<think>", ""]
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.response_normalization.strip_think_tags);
     }
 }

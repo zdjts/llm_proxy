@@ -93,7 +93,6 @@ async fn purge_expired(pool: &SqlitePool) {
         let (ts_column, is_ms) = match table_name.as_str() {
             "request_log" => ("ts", true),
             "audit_hourly" => ("hour_ts", true),
-            "audit_trail" => ("created_at", true),
             "ui_event_log" => ("created_at", true),
             "alert_event" => ("created_at", true),
             _ => {

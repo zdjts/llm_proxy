@@ -1,10 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams, Link } from 'react-router-dom';
 import { fetchDrilldown } from '@/lib/api';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { ArrowLeft } from 'lucide-react';
 import { useLocale } from '@/i18n/context';
 import { EmptyState, ErrorState, Skeleton } from '@/components/ui';
+import { AreaChart } from '@/components/charts';
 
 export function DrilldownPage() {
   const { t } = useLocale();
@@ -23,7 +23,7 @@ export function DrilldownPage() {
     const pts2 = data.chart.lines[1]?.points.split(' ').map(p => p.split(','));
     const pts3 = data.chart.lines[2]?.points.split(' ').map(p => p.split(','));
     return {
-      hour: l.text,
+      label: l.text,
       requests: pts1?.[i + 1] ? Math.round((1 - (parseFloat(pts1[i + 1][1]) - 40) / 160) * 100) : 0,
       promptTokens: pts2?.[i + 1] ? Math.round((1 - (parseFloat(pts2[i + 1][1]) - 40) / 160) * 100) : 0,
       completionTokens: pts3?.[i + 1] ? Math.round((1 - (parseFloat(pts3[i + 1][1]) - 40) / 160) * 100) : 0,
@@ -56,27 +56,15 @@ export function DrilldownPage() {
         <div className="glass-card p-5">
           <h3 className="text-sm font-semibold text-surface-700 mb-4">{t.drilldown.hourlyBreakdown}</h3>
           <div className="h-80">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData}>
-                <defs>
-                  <linearGradient id="dr1" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#0a0a0a" stopOpacity={0.12} /><stop offset="100%" stopColor="#0a0a0a" stopOpacity={0} /></linearGradient>
-                  <linearGradient id="dr2" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#525252" stopOpacity={0.15} /><stop offset="100%" stopColor="#525252" stopOpacity={0} /></linearGradient>
-                  <linearGradient id="dr3" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#a3a3a3" stopOpacity={0.15} /><stop offset="100%" stopColor="#a3a3a3" stopOpacity={0} /></linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e0d9" />
-                <XAxis dataKey="hour" tick={{ fill: '#8e877d', fontSize: 10 }} axisLine={false} tickLine={false} />
-                <YAxis hide />
-                <Tooltip contentStyle={{ background: 'white', border: '1px solid #e4e7f0', borderRadius: 12, color: '#374151', boxShadow: '0 4px 20px rgba(0,0,0,0.08)' }} />
-                <Area type="monotone" dataKey="requests" stroke="#0a0a0a" fill="url(#dr1)" strokeWidth={1.5} />
-                <Area type="monotone" dataKey="promptTokens" stroke="#525252" fill="url(#dr2)" strokeWidth={1.5} />
-                <Area type="monotone" dataKey="completionTokens" stroke="#a3a3a3" fill="url(#dr3)" strokeWidth={1.5} />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="flex gap-5 mt-3 px-2 text-xs text-surface-400">
-            <div className="flex items-center gap-1.5"><div className="h-3 w-3 rounded-sm bg-surface-900" /> {t.drilldown.requests}</div>
-            <div className="flex items-center gap-1.5"><div className="h-3 w-3 rounded-sm bg-surface-600" /> {t.drilldown.promptTokens}</div>
-            <div className="flex items-center gap-1.5"><div className="h-3 w-3 rounded-sm bg-surface-400" /> {t.drilldown.completionTokens}</div>
+            <AreaChart
+              data={chartData}
+              series={[
+                { key: 'requests', label: t.drilldown.requests, color: '#0a0a0a' },
+                { key: 'promptTokens', label: t.drilldown.promptTokens, color: '#525252' },
+                { key: 'completionTokens', label: t.drilldown.completionTokens, color: '#a3a3a3' },
+              ]}
+              height={320}
+            />
           </div>
         </div>
       )}

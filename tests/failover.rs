@@ -47,6 +47,18 @@ fn it_removes_bad_key_after_recovery() {
 }
 
 #[test]
+fn it_does_not_demote_last_key_on_429() {
+    let bad = Arc::new(BadKeyRegistry::new());
+    let router = Router::new(HashMap::new(), HashMap::new(), Arc::clone(&bad));
+    let pool = pool_with_keys(&["only-key"]);
+    let key = pool.keys[0].clone();
+
+    assert!(!router.try_demote(&pool, "p", &key));
+    assert!(!bad.is_bad("p", &key.identity_hash()));
+    assert!(router.pick_key(&pool, "p").is_some());
+}
+
+#[test]
 fn it_pool_exhausted_after_all_bad() {
     let bad = Arc::new(BadKeyRegistry::new());
     let router = Router::new(HashMap::new(), HashMap::new(), Arc::clone(&bad));

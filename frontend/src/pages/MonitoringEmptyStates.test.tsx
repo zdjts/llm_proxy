@@ -1,20 +1,11 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PropsWithChildren } from 'react';
-import axios from 'axios';
 import { LocaleProvider } from '@/i18n/context';
 import { fetchTraffic } from '@/lib/api';
-import { HelpPage } from './Help';
 import { TrafficPage } from './Traffic';
 
-vi.mock('axios', () => ({ default: { get: vi.fn() } }));
 vi.mock('@/lib/api', () => ({ fetchTraffic: vi.fn() }));
-vi.mock('recharts', () => ({
-  Area: () => null, AreaChart: ({ children }: PropsWithChildren) => <div>{children}</div>, Bar: () => null,
-  BarChart: ({ children }: PropsWithChildren) => <div>{children}</div>, CartesianGrid: () => null,
-  ResponsiveContainer: ({ children }: PropsWithChildren) => <div>{children}</div>, Tooltip: () => null, XAxis: () => null, YAxis: () => null,
-}));
 
 function renderPage(page: React.ReactNode) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -23,15 +14,7 @@ function renderPage(page: React.ReactNode) {
 
 describe('monitoring successful empty states', () => {
   beforeEach(() => {
-    vi.mocked(axios.get).mockReset();
     vi.mocked(fetchTraffic).mockReset();
-  });
-
-  it('shows localized empty state for an empty help runbook', async () => {
-    vi.mocked(axios.get).mockResolvedValue({ data: { runbook: '   ' } });
-    renderPage(<HelpPage />);
-    expect(await screen.findByText('No documentation is available.')).toBeInTheDocument();
-    expect(screen.queryByText('Loading documentation...')).not.toBeInTheDocument();
   });
 
   it('shows an empty state without traffic shells for empty series', async () => {

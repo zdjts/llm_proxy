@@ -34,6 +34,35 @@ pub struct LiveRequestEvent {
     pub latency_ms: i64,
     pub tokens: Option<u32>,
     pub ts: i64,
+    pub tenant_id: String,
+    pub key_hash: String,
+    pub error_code: Option<String>,
+    pub is_stream: bool,
+    pub cost_usd: Option<f64>,
+}
+
+/// Broadcast a completed request to all `/admin/live` subscribers.
+/// Called at every `request_log` write site so the dashboard reflects
+/// each request the moment it finishes.
+pub fn broadcast_request_log(log: &crate::db::RequestLog) {
+    let tokens = log
+        .total_tokens
+        .map(|t| u32::try_from(t).unwrap_or(u32::MAX));
+    broadcast_live_event(&LiveRequestEvent {
+        event_type: "request".into(),
+        request_id: log.id.clone(),
+        model: log.model.clone(),
+        pool_id: log.pool_id.clone(),
+        status_code: log.status_code.unwrap_or(0).max(0) as u16,
+        latency_ms: log.latency_ms.unwrap_or(0),
+        tokens,
+        ts: log.ts,
+        tenant_id: log.audit.from_auth.tenant_id.clone(),
+        key_hash: log.key_hash.clone(),
+        error_code: log.error_code.clone(),
+        is_stream: log.is_stream,
+        cost_usd: log.cost_usd,
+    });
 }
 
 impl LiveRequestEvent {
@@ -90,6 +119,11 @@ mod tests {
             latency_ms: 12,
             tokens: Some(3),
             ts: 1,
+            tenant_id: "default".into(),
+            key_hash: "abc123def456".into(),
+            error_code: None,
+            is_stream: false,
+            cost_usd: Some(0.01),
         }
     }
 

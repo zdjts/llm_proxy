@@ -28,10 +28,12 @@ export interface CostResponse {
 }
 
 export interface RequestRow {
+  id: string;
   ts: number;
   model: string;
   pool_id: string;
   key_hash: string;
+  tenant_id: string;
   status_code: string;
   prompt_tokens: string;
   completion_tokens: string;
@@ -41,6 +43,8 @@ export interface RequestRow {
   latency_ms: number;
   ttft_ms: string | null;
   retry_count: number;
+  is_stream: boolean;
+  cost_usd: number | null;
 }
 
 export interface RequestFilter {
@@ -51,12 +55,47 @@ export interface RequestFilter {
   error_code?: string;
   min_retry?: number;
   hours?: number;
+  offset?: number;
+  limit?: number;
 }
 
 export interface RequestsResponse {
   rows: RequestRow[];
   filter: RequestFilter;
   tenants: string[];
+  total: number;
+  has_more: boolean;
+}
+
+export interface RequestDetail {
+  id: string;
+  ts: number;
+  client_ip: string | null;
+  model: string;
+  pool_id: string;
+  key_hash: string;
+  upstream: string | null;
+  status_code: number | null;
+  latency_ms: number | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  total_tokens: number | null;
+  is_stream: boolean;
+  error: string | null;
+  cached_tokens: number | null;
+  cache_creation_tokens: number | null;
+  cache_source: string | null;
+  reasoning_tokens: number | null;
+  audio_tokens: number | null;
+  ttft_ms: number | null;
+  upstream_model: string | null;
+  system_fingerprint: string | null;
+  finish_reason: string | null;
+  error_code: string | null;
+  retry_count: number;
+  tenant_id: string;
+  user_agent: string | null;
+  cost_usd: number | null;
 }
 
 export interface KeyView {

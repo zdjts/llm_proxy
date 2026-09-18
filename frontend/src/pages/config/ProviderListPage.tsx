@@ -59,8 +59,6 @@ export function ProviderListPage() {
           <input className="input-glass w-full" placeholder={t.configAdmin.providerId} value={form.id} onChange={e => setForm({ ...form, id: e.target.value })} />
           <select className="input-glass w-full" value={form.kind} onChange={e => setForm({ ...form, kind: e.target.value })}>
             <option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="gemini">Gemini</option>
-            <option value="azure">Azure</option><option value="cohere">Cohere</option><option value="mistral">Mistral</option>
-            <option value="ollama">Ollama</option><option value="vllm">vLLM</option>
           </select>
           <input className="input-glass w-full" placeholder={t.configAdmin.baseUrl} value={form.base_url} onChange={e => setForm({ ...form, base_url: e.target.value })} />
           <input className="input-glass w-full" placeholder={t.configAdmin.poolId} value={form.pool_id} onChange={e => setForm({ ...form, pool_id: e.target.value })} />

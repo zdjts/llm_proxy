@@ -389,6 +389,8 @@ fn finish_reason_and_upstream_model_are_extracted() {
                 content: Some("ok".into()),
                 tool_calls: None,
                 reasoning_content: None,
+                reasoning: None,
+                reasoning_text: None,
                 thinking: None,
             },
             finish_reason: Some("stop".into()),

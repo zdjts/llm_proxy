@@ -136,9 +136,13 @@ model_to_pool:
 #     discord:
 #       enabled: false
 #       url: ""
-#     email:
-#       enabled: false
-#       to: ""
+
+# Response normalisation: fold `reasoning` / `reasoning_text` into
+# OpenAI `reasoning_content`, and as a fallback pull inlined
+# <think>…</think> blocks out of `content` so clients like pi can fold
+# the chain-of-thought.  Off by default.
+# response_normalization:
+#   strip_think_tags: false   # set true to enable
 
 # admin:
 #   enabled: true

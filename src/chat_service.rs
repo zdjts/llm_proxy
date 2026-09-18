@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use crate::config::PoolConfig;
 use crate::error::AppError;
-use crate::provider::Provider;
 use crate::router::{ResolveResult, Router, RouterHandle};
 
 #[derive(Clone)]
@@ -44,21 +43,15 @@ impl ChatCompletionService {
         router.pick_key(pool, pool_id)
     }
 
-    pub fn mark_bad(&self, router: &Router, pool_id: &str, key: &crate::config::KeyEntry) {
-        router.mark_bad(pool_id, key);
-    }
-
-    pub fn provider_for<'a>(
+    /// Demote a key unless it is the last remaining healthy key in the pool.
+    pub fn try_demote(
         &self,
-        result: ResolveResult<'a>,
-    ) -> (
-        Arc<dyn Provider>,
-        &'a PoolConfig,
-        &'a str,
-        Option<&'a serde_json::Value>,
-        Option<&'a str>,
-    ) {
-        result
+        router: &Router,
+        pool: &PoolConfig,
+        pool_id: &str,
+        key: &crate::config::KeyEntry,
+    ) -> bool {
+        router.try_demote(pool, pool_id, key)
     }
 }
 
@@ -101,5 +94,21 @@ mod tests {
             service.pick_key(&snapshot, &pool, "pool").unwrap().key,
             "test-key"
         );
+    }
+
+    #[test]
+    fn service_does_not_demote_the_only_key() {
+        let pool = PoolConfig {
+            keys: vec![KeyEntry::api_key("only", 1)],
+        };
+        let router = Arc::new(Router::new(
+            HashMap::new(),
+            HashMap::new(),
+            Arc::new(BadKeyRegistry::new()),
+        ));
+        let service = ChatCompletionService::new(RouterHandle::new(router));
+        let snapshot = service.snapshot();
+        assert!(!service.try_demote(&snapshot, &pool, "pool", &pool.keys[0]));
+        assert!(service.pick_key(&snapshot, &pool, "pool").is_some());
     }
 }

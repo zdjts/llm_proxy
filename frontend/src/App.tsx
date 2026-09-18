@@ -4,13 +4,11 @@ import { LocaleProvider } from '@/i18n/context';
 import { Layout } from '@/components/Layout';
 import { Overview } from '@/pages/Overview';
 import { CostPage } from '@/pages/Cost';
-import { RequestsPage } from '@/pages/Requests';
 import { KeysPage } from '@/pages/Keys';
 import { TrafficPage } from '@/pages/Traffic';
-import { AlertsPage } from '@/pages/Alerts';
 import { DrilldownPage } from '@/pages/Drilldown';
-import { HelpPage } from '@/pages/Help';
-import { LivePage } from '@/pages/Live';
+import { UsagePage } from '@/pages/Usage';
+import { RequestsPage } from '@/pages/Requests';
 import { ClientKeysPage } from '@/pages/ClientKeys';
 import { ConfigConsolePage } from '@/pages/ConfigConsole';
 import { ProviderListPage } from '@/pages/config/ProviderListPage';
@@ -27,13 +25,11 @@ export default function App() {
       <Route path="/" element={<Navigate to="/console" replace />} />
       <Route path="/console" element={<Overview />} />
       <Route path="/cost" element={<CostPage />} />
-      <Route path="/requests" element={<RequestsPage />} />
       <Route path="/keys" element={<KeysPage />} />
       <Route path="/traffic" element={<TrafficPage />} />
-      <Route path="/alerts" element={<AlertsPage />} />
+      <Route path="/usage" element={<UsagePage />} />
+      <Route path="/requests" element={<RequestsPage />} />
       <Route path="/cost/drilldown" element={<DrilldownPage />} />
-      <Route path="/help" element={<HelpPage />} />
-      <Route path="/live" element={<LivePage />} />
       <Route path="/client-keys" element={<ClientKeysPage />} />
       <Route path="/config" element={<ConfigConsolePage />} />
       <Route path="/config/pools" element={<PoolListPage />} />

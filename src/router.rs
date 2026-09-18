@@ -8,6 +8,8 @@
 //!
 //! - Only operates through `Arc<dyn Provider>` — never matches concrete types.
 //! - Weight-0 keys are skipped entirely.
+//! - The last remaining healthy key is never demoted (so a single-key pool
+//!   cannot be emptied by a 429).
 //! - Full-pool exhaustion returns `AppError::Internal` (HTTP 500).
 
 use std::collections::HashMap;
@@ -159,15 +161,21 @@ impl Router {
         ))
     }
 
+    /// Number of selectable (weight > 0, not currently bad) keys in the pool.
+    pub fn healthy_key_count(&self, pool: &PoolConfig, pool_id: &str) -> usize {
+        pool.keys
+            .iter()
+            .filter(|k| {
+                let kh = k.identity_hash();
+                k.weight > 0 && !self.bad_keys.is_bad(pool_id, &kh)
+            })
+            .count()
+    }
+
     /// Select a key from the pool via weighted-random sampling, skipping bad keys.
     ///
     /// Returns `None` when all keys in the pool are bad or have zero weight.
     pub fn pick_key(&self, pool: &PoolConfig, pool_id: &str) -> Option<KeyEntry> {
-        let total = pool.keys.len();
-        if self.bad_keys.all_bad(pool_id, total) {
-            return None;
-        }
-
         let candidates: Vec<(usize, &KeyEntry)> = pool
             .keys
             .iter()
@@ -198,6 +206,19 @@ impl Router {
     pub fn mark_bad(&self, pool_id: &str, key: &KeyEntry) {
         let kh = key.identity_hash();
         self.bad_keys.mark_bad(pool_id, &kh);
+    }
+
+    /// Demote a key unless it is the last remaining healthy key in the pool.
+    ///
+    /// Returns `true` when the key was marked bad. A `false` return means the
+    /// caller should surface the upstream error instead of treating the pool
+    /// as exhausted.
+    pub fn try_demote(&self, pool: &PoolConfig, pool_id: &str, key: &KeyEntry) -> bool {
+        if self.healthy_key_count(pool, pool_id) <= 1 {
+            return false;
+        }
+        self.mark_bad(pool_id, key);
+        true
     }
 
     /// Return an "all keys exhausted" error.
@@ -379,6 +400,32 @@ mod tests {
 
         let key = router.pick_key(&pool, "test_pool");
         assert!(key.is_none(), "all keys bad → no selection");
+    }
+
+    #[test]
+    fn it_does_not_demote_the_last_healthy_key() {
+        let pool = pool_with_weights(&[1]);
+        let (router, _) = test_router();
+        let key = pool.keys[0].clone();
+
+        assert!(!router.try_demote(&pool, "test_pool", &key));
+        assert_eq!(router.healthy_key_count(&pool, "test_pool"), 1);
+        assert!(router.pick_key(&pool, "test_pool").is_some());
+    }
+
+    #[test]
+    fn it_demotes_when_another_healthy_key_remains() {
+        let pool = pool_with_weights(&[1, 1]);
+        let (router, bad) = test_router();
+        let first = pool.keys[0].clone();
+
+        assert!(router.try_demote(&pool, "test_pool", &first));
+        assert!(bad.is_bad("test_pool", &first.identity_hash()));
+        assert_eq!(router.healthy_key_count(&pool, "test_pool"), 1);
+        let picked = router.pick_key(&pool, "test_pool").unwrap();
+        assert_eq!(picked.key, "sk-key-1");
+        assert!(!router.try_demote(&pool, "test_pool", &picked));
+        assert_eq!(router.healthy_key_count(&pool, "test_pool"), 1);
     }
 
     #[test]

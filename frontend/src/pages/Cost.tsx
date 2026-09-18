@@ -1,6 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { motion } from 'framer-motion';
 import { fetchCost } from '@/lib/api';
 import { Download } from 'lucide-react';
 import { csvDownload } from '@/lib/utils';
@@ -62,10 +61,10 @@ export function CostPage() {
             { label: t.cost.completionTokens, value: data.stats.completion_tokens.toLocaleString(), key: 'completion' },
             { label: t.cost.cachedTokens, value: data.stats.cached_tokens.toLocaleString(), key: 'cached' },
           ].map((s, i) => (
-            <motion.div key={s.key} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }} className="rounded-2xl border border-surface-200 bg-white p-4 shadow-[0_8px_28px_-18px_rgba(10,10,10,0.18)] transition-shadow duration-300 hover:shadow-[0_14px_34px_-20px_rgba(10,10,10,0.24)]">
+            <div key={s.key} style={{ animationDelay: `${Math.min(i, 11) * 50}ms` }} className="rise rounded-2xl border border-surface-200 bg-white p-4 shadow-[0_8px_28px_-18px_rgba(10,10,10,0.18)] transition-shadow duration-300 hover:shadow-[0_14px_34px_-20px_rgba(10,10,10,0.24)]">
               <div className="text-xs font-medium text-surface-500">{s.label}</div>
               <div className="mt-1 font-operational text-2xl font-bold tracking-tight text-surface-900">{s.value}</div>
-            </motion.div>
+            </div>
           ))}
         </div>
       )}

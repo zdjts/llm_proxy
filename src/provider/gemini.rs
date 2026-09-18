@@ -425,6 +425,8 @@ fn gemini_to_openai(gm: &GeminiResponse, model: &str) -> ChatCompletionResponse 
                 content: Some(content_text),
                 tool_calls: None,
                 reasoning_content,
+                reasoning: None,
+                reasoning_text: None,
                 thinking: None,
             },
             finish_reason,

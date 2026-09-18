@@ -1,11 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { fetchTraffic } from '@/lib/api';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 import { Download } from 'lucide-react';
 import { csvDownload } from '@/lib/utils';
 import { useLocale } from '@/i18n/context';
 import { EmptyState, ErrorState, Skeleton } from '@/components/ui';
+import { AreaChart } from '@/components/charts';
 
 export function TrafficPage() {
   const { t } = useLocale();
@@ -78,35 +78,25 @@ export function TrafficPage() {
       <div className="glass-card p-5">
         <h3 className="text-sm font-semibold text-surface-700 mb-4">{t.traffic.requestVolume}</h3>
         <div className="h-72">
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={chartData}>
-              <defs><linearGradient id="colorReq" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#0a0a0a" stopOpacity={0.12} /><stop offset="100%" stopColor="#0a0a0a" stopOpacity={0} /></linearGradient></defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e0d9" />
-              <XAxis dataKey="label" tick={{ fill: '#8e877d', fontSize: 11 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fill: '#8e877d', fontSize: 10 }} axisLine={false} tickLine={false} />
-              <Tooltip contentStyle={{ background: 'white', border: '1px solid #e5e0d9', borderRadius: 8, color: '#403d38', boxShadow: '0 4px 16px rgba(41,39,36,0.08)' }} />
-              <Area type="monotone" dataKey="requests" stroke="#0a0a0a" fill="url(#colorReq)" strokeWidth={2} />
-            </AreaChart>
-          </ResponsiveContainer>
+          <AreaChart
+            data={chartData}
+            series={[{ key: 'requests', label: t.traffic.requests, color: '#0a0a0a' }]}
+            height={288}
+          />
         </div>
       </div>
 
       <div className="glass-card p-5">
         <h3 className="text-sm font-semibold text-surface-700 mb-4">{t.traffic.latencyTrend}</h3>
         <div className="h-72">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e0d9" />
-              <XAxis dataKey="label" tick={{ fill: '#8e877d', fontSize: 11 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fill: '#8e877d', fontSize: 10 }} axisLine={false} tickLine={false} />
-              <Tooltip contentStyle={{ background: 'white', border: '1px solid #e5e0d9', borderRadius: 8, color: '#403d38', boxShadow: '0 4px 16px rgba(41,39,36,0.08)' }} />
-              <Bar dataKey="latencyMs" fill="#525252" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          <AreaChart
+            data={chartData}
+            series={[{ key: 'latencyMs', label: t.traffic.latency, color: '#0a0a0a' }]}
+            height={288}
+          />
         </div>
         <div className="flex gap-4 mt-3 px-2 text-xs text-surface-400">
-          <div className="flex items-center gap-1.5"><div className="h-3 w-3 rounded-sm bg-surface-900" /> {t.traffic.requests}</div>
-          <div className="flex items-center gap-1.5"><div className="h-3 w-3 rounded-sm bg-surface-500" /> {t.traffic.latency}</div>
+          <div className="flex items-center gap-1.5"><div className="h-3 w-3 rounded-sm bg-surface-900" /> {t.traffic.latency}</div>
         </div>
       </div>
       </>}

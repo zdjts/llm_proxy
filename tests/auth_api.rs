@@ -61,6 +61,7 @@ async fn setup() -> (SqlitePool, TempDir, AppState) {
         cache_max_entries: 256,
         alerts: Default::default(),
         concurrency: Default::default(),
+        response_normalization: Default::default(),
     });
 
     let (alert_tx, _) = broadcast::channel(16);
@@ -122,331 +123,6 @@ async fn admin_ip_guard_hides_config_routes_from_non_whitelisted_ip() {
 }
 
 #[tokio::test]
-async fn http_rollback_restores_provider_pool_and_routing_and_records_audit() {
-    let (pool, _dir, state) = setup().await;
-    sqlx::query("INSERT INTO key_pool (id, strategy) VALUES ('rollback-pool', 'weighted_random')")
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO provider_config (id, kind, base_url, pool_id, metadata) VALUES ('rollback-provider', 'openai', 'http://provider', 'rollback-pool', '{\"region\":\"test\"}')")
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query("INSERT INTO routing_config (logical_model, pool_id, default_params) VALUES ('rollback-model', 'rollback-pool', '{\"temperature\":0.25,\"nested\":{\"top_p\":0.9}}')")
-        .execute(&pool)
-        .await
-        .unwrap();
-    state.config_store.refresh_from_db().await.unwrap();
-
-    let provider_before = serde_json::json!({
-        "id": "rollback-provider", "kind": "openai", "base_url": "http://provider",
-        "pool_id": "rollback-pool", "metadata": {"region": "test"}
-    });
-    llm_proxy::audit_trail::record_audit(
-        &pool,
-        llm_proxy::audit_trail::AuditEvent {
-            event_type: "provider.delete".into(),
-            actor_id: None,
-            actor_ip: None,
-            target_type: "provider_config".into(),
-            target_id: "rollback-provider".into(),
-            before_json: Some(provider_before),
-            after_json: None,
-            metadata: None,
-        },
-    )
-    .await
-    .unwrap();
-    let provider_audit_id: i64 = sqlx::query_scalar(
-        "SELECT id FROM audit_trail WHERE event_type = 'provider.delete' ORDER BY id DESC LIMIT 1",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    sqlx::query("DELETE FROM provider_config WHERE id = 'rollback-provider'")
-        .execute(&pool)
-        .await
-        .unwrap();
-
-    let routing_before = serde_json::json!({
-        "logical_model": "rollback-model", "pool_id": "rollback-pool",
-        "default_params": {"temperature": 0.25, "nested": {"top_p": 0.9}}
-    });
-    llm_proxy::audit_trail::record_audit(
-        &pool,
-        llm_proxy::audit_trail::AuditEvent {
-            event_type: "routing.delete".into(),
-            actor_id: None,
-            actor_ip: None,
-            target_type: "routing_config".into(),
-            target_id: "rollback-model".into(),
-            before_json: Some(routing_before),
-            after_json: None,
-            metadata: None,
-        },
-    )
-    .await
-    .unwrap();
-    let routing_audit_id: i64 = sqlx::query_scalar(
-        "SELECT id FROM audit_trail WHERE event_type = 'routing.delete' ORDER BY id DESC LIMIT 1",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    sqlx::query("DELETE FROM routing_config WHERE logical_model = 'rollback-model'")
-        .execute(&pool)
-        .await
-        .unwrap();
-
-    let pool_before =
-        serde_json::json!({"id": "rollback-pool", "strategy": "weighted_random", "keys": []});
-    llm_proxy::audit_trail::record_audit(
-        &pool,
-        llm_proxy::audit_trail::AuditEvent {
-            event_type: "pool.delete".into(),
-            actor_id: None,
-            actor_ip: None,
-            target_type: "key_pool".into(),
-            target_id: "rollback-pool".into(),
-            before_json: Some(pool_before),
-            after_json: None,
-            metadata: None,
-        },
-    )
-    .await
-    .unwrap();
-    let pool_audit_id: i64 = sqlx::query_scalar(
-        "SELECT id FROM audit_trail WHERE event_type = 'pool.delete' ORDER BY id DESC LIMIT 1",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    sqlx::query("DELETE FROM key_pool WHERE id = 'rollback-pool'")
-        .execute(&pool)
-        .await
-        .unwrap();
-    state.config_store.refresh_from_db().await.unwrap();
-    let version_before = state.config_store.version().await;
-
-    let router = app(state.clone());
-    for audit_id in [pool_audit_id, provider_audit_id, routing_audit_id] {
-        let response = router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/admin/api/config/rollback/{audit_id}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let response_status = response.status();
-        let body = axum::body::to_bytes(response.into_body(), 4096)
-            .await
-            .unwrap();
-        assert_eq!(
-            response_status,
-            StatusCode::OK,
-            "rollback {audit_id} failed: {}",
-            String::from_utf8_lossy(&body)
-        );
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["ok"],
-            true
-        );
-    }
-
-    assert!(
-        sqlx::query("SELECT 1 FROM provider_config WHERE id = 'rollback-provider'")
-            .fetch_optional(&pool)
-            .await
-            .unwrap()
-            .is_some()
-    );
-    let params: String = sqlx::query_scalar(
-        "SELECT default_params FROM routing_config WHERE logical_model = 'rollback-model'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&params).unwrap()["nested"]["top_p"],
-        0.9
-    );
-    assert!(
-        sqlx::query("SELECT 1 FROM key_pool WHERE id = 'rollback-pool'")
-            .fetch_optional(&pool)
-            .await
-            .unwrap()
-            .is_some()
-    );
-    assert!(state.config_store.version().await > version_before);
-    let rollback_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM audit_trail WHERE event_type = 'config.rollback'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(rollback_count, 3);
-}
-
-#[tokio::test]
-async fn http_rollback_rejects_sensitive_pool_without_creating_empty_pool() {
-    let (pool, _dir, state) = setup().await;
-    let before = serde_json::json!({"id":"secret-pool","strategy":"weighted_random","keys":[{"key_hash":"deadbeef1234","weight":1}]});
-    llm_proxy::audit_trail::record_audit(
-        &pool,
-        llm_proxy::audit_trail::AuditEvent {
-            event_type: "pool.delete".into(),
-            actor_id: None,
-            actor_ip: None,
-            target_type: "key_pool".into(),
-            target_id: "secret-pool".into(),
-            before_json: Some(before),
-            after_json: None,
-            metadata: None,
-        },
-    )
-    .await
-    .unwrap();
-    let audit_id: i64 = sqlx::query_scalar(
-        "SELECT id FROM audit_trail WHERE target_id = 'secret-pool' ORDER BY id DESC LIMIT 1",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    let version_before = state.config_store.version().await;
-    let response = app(state.clone())
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/admin/api/config/rollback/{audit_id}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    assert!(
-        sqlx::query("SELECT 1 FROM key_pool WHERE id = 'secret-pool'")
-            .fetch_optional(&pool)
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert_eq!(state.config_store.version().await, version_before);
-    let audit_json: String =
-        sqlx::query_scalar("SELECT before_json FROM audit_trail WHERE id = ?1")
-            .bind(audit_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert!(!audit_json.contains("plaintext"));
-}
-
-#[tokio::test]
-async fn client_key_crud_audit_never_persists_plaintext_keys() {
-    let (pool, _dir, mut state) = setup().await;
-    state.auth_store = Some(Arc::new(llm_proxy::auth_store::AuthStore::new(vec![])));
-    let router = app(state);
-    let original = "create-secret-key";
-    let created = router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/admin/api/client-keys")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    serde_json::json!({"key": original, "tenant_id": "tenant-a", "label": "test"})
-                        .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(created.status(), StatusCode::OK);
-    let created_body: serde_json::Value = serde_json::from_slice(
-        &axum::body::to_bytes(created.into_body(), 4096)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    assert!(created_body.get("key").is_none());
-    let original_hash = created_body["key_hash"].as_str().unwrap().to_owned();
-
-    let audit_after_create: String = sqlx::query_scalar(
-        "SELECT after_json FROM audit_trail WHERE event_type = 'key.create' ORDER BY created_at DESC LIMIT 1",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert!(!audit_after_create.contains(original));
-    assert!(!audit_after_create.contains("\"key\""));
-
-    let rotated = router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/admin/api/client-keys/{original_hash}"))
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    serde_json::json!({"new_key": "rotated-secret-key"}).to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(rotated.status(), StatusCode::OK);
-    let rotated_body: serde_json::Value = serde_json::from_slice(
-        &axum::body::to_bytes(rotated.into_body(), 4096)
-            .await
-            .unwrap(),
-    )
-    .unwrap();
-    assert!(rotated_body.get("key").is_none());
-    let rotated_hash = rotated_body["key_hash"].as_str().unwrap().to_owned();
-
-    let audit_before_rotate: String = sqlx::query_scalar(
-        "SELECT before_json FROM audit_trail WHERE event_type = 'key.rotate' ORDER BY created_at DESC LIMIT 1",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert!(!audit_before_rotate.contains(original));
-    assert!(!audit_before_rotate.contains("rotated-secret-key"));
-
-    let audit_after_rotate: String = sqlx::query_scalar(
-        "SELECT after_json FROM audit_trail WHERE event_type = 'key.rotate' ORDER BY created_at DESC LIMIT 1",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert!(!audit_after_rotate.contains("rotated-secret-key"));
-
-    let deleted = router
-        .oneshot(
-            Request::builder()
-                .method("DELETE")
-                .uri(format!("/admin/api/client-keys/{rotated_hash}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(deleted.status(), StatusCode::OK);
-    let audit_before_delete: String = sqlx::query_scalar(
-        "SELECT before_json FROM audit_trail WHERE event_type = 'key.delete' ORDER BY created_at DESC LIMIT 1",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert!(!audit_before_delete.contains("rotated-secret-key"));
-    assert!(!audit_before_delete.contains("\"key\""));
-}
-
-#[tokio::test]
 async fn config_validate_accepts_example_yaml() {
     let (_pool, _dir, state) = setup().await;
     let response = app(state)
@@ -491,6 +167,63 @@ async fn config_export_returns_importable_yaml() {
         "export must use openai not open_ai"
     );
     llm_proxy::config_store::ConfigStore::validate_yaml(&yaml).unwrap();
+}
+
+#[tokio::test]
+async fn config_export_preserves_response_normalization_round_trip() {
+    use llm_proxy::config::ResponseNormalization;
+
+    // Build a state whose startup policy has a non-default
+    // `response_normalization`.  The export document must include that
+    // flag so an operator who exports, edits another section, and
+    // re-imports does not silently lose it.
+    let (_pool, _dir, state) = setup().await;
+    let custom = ResponseNormalization {
+        strip_think_tags: true,
+    };
+    let runtime = std::sync::Arc::new(llm_proxy::config_store::RuntimePolicy {
+        failover: state.config.failover.clone(),
+        alerts: state.config.alerts.clone(),
+        cache_max_entries: state.config.cache_max_entries,
+        response_normalization: custom.clone(),
+    });
+    state
+        .config_store
+        .set_bootstrap_runtime((*runtime).clone())
+        .await;
+
+    // Export.
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/api/config/export")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let yaml = String::from_utf8(body.to_vec()).unwrap();
+
+    // Assert the YAML contains the operator-chosen settings.
+    assert!(
+        yaml.contains("strip_think_tags: true"),
+        "export must include strip_think_tags: {yaml}"
+    );
+    assert!(
+        !yaml.contains("think_tag_pairs:"),
+        "export must not include think_tag_pairs: {yaml}"
+    );
+
+    let parsed = llm_proxy::config_store::ConfigStore::validate_yaml(&yaml).unwrap();
+    assert_eq!(
+        parsed.response_normalization.strip_think_tags,
+        custom.strip_think_tags
+    );
 }
 
 #[tokio::test]

@@ -1,6 +1,6 @@
 //! AlertChannel trait and delivery implementations — ADR-013 §3 (T55).
 //!
-//! Four channel types: Webhook, Slack, Discord, Email (stub).
+//! Four channel types: Webhook, Slack, Discord.
 
 use async_trait::async_trait;
 use reqwest::Client;
@@ -159,27 +159,5 @@ impl AlertChannel for DiscordChannel {
                 msg: format!("HTTP {}", resp.status().as_u16()),
             })
         }
-    }
-}
-
-// ── EmailChannel (stub) ─────────────────────────────────────────────────
-
-pub struct EmailChannel {
-    pub to: String,
-}
-
-#[async_trait]
-impl AlertChannel for EmailChannel {
-    fn id(&self) -> &str {
-        "email"
-    }
-
-    async fn deliver(&self, event: &AlertEvent, _sig: Option<&str>) -> Result<(), ChannelError> {
-        tracing::info!(
-            to = %self.to,
-            event_type = event.event_type(),
-            "email stub — would send alert"
-        );
-        Ok(())
     }
 }

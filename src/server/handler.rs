@@ -4,7 +4,7 @@
 //! Server/router match only `Arc<dyn Provider>`.
 
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use axum::Json;
 use axum::body::Body;
@@ -12,15 +12,20 @@ use axum::extract::State;
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use futures::StreamExt;
+use futures::stream::BoxStream;
 use tokio::sync::broadcast;
 
 use crate::alerts::AlertEvent;
 use crate::audit::{AuditDetail, AuditFromAuth, AuditFromRouter};
 use crate::auth::AuthedClient;
+use crate::config::ResponseNormalization;
+use crate::dashboard::live::broadcast_request_log;
 use crate::db;
 use crate::error::AppError;
+use crate::metrics::Metrics;
 use crate::provider::ProviderResponse;
 use crate::provider::inspector::StreamInspector;
+use crate::server::stream_normalize::NormalizingStream;
 use crate::types::{ChatCompletionRequest, ModelMetadataResponse, ModelsResponse};
 
 use super::AppState;
@@ -35,7 +40,14 @@ pub(crate) struct StreamContext {
     pub pool_id: String,
     pub key_hash: String,
     pub upstream: String,
-    pub latency_ms: i64,
+    /// When the client request arrived. Both TTFT and total-stream latency
+    /// are measured from this instant.  We deliberately do NOT record
+    /// latency_ms at `provider.chat()` return — for streaming, `chat()`
+    /// resolves as soon as response headers come back (TTFB), which is far
+    /// smaller than the actual stream duration for any non-trivial
+    /// completion.  The spawned inspector task records the real total
+    /// stream time once the body has been fully consumed.
+    pub request_started_at: Instant,
     pub db_pool: sqlx::SqlitePool,
     pub retry_count: i32,
     pub tenant_id: String,
@@ -43,7 +55,12 @@ pub(crate) struct StreamContext {
     pub min_latency_ms: u64,
     pub user_agent: Option<String>,
     pub client_ip: Option<String>,
-    pricing: Arc<crate::config::pricing::PricingConfig>,
+    pub pricing: Arc<crate::config::pricing::PricingConfig>,
+    pub metrics: Arc<Metrics>,
+    /// Response normalisation policy.  Read on the streaming path to
+    /// decide whether to wrap the upstream body with a
+    /// [`NormalizingStream`].
+    pub normalization: Arc<ResponseNormalization>,
 }
 
 pub async fn chat_completions_handler(
@@ -69,6 +86,7 @@ pub async fn chat_completions_handler(
     let tenant_id = client.tenant_id.clone();
     let is_streaming = req.stream.unwrap_or(false);
     let start = SystemTime::now();
+    let started_at = Instant::now();
     let model = req.model.clone();
 
     let _concurrency_guard = match state.concurrency.acquire(&tenant_id).await {
@@ -134,6 +152,7 @@ pub async fn chat_completions_handler(
             cost_usd: cost,
         };
         let _ = db::log_request(&state.db, &log).await;
+        broadcast_request_log(&log);
         return Ok((StatusCode::OK, Json(cached)).into_response());
     }
 
@@ -187,9 +206,9 @@ pub async fn chat_completions_handler(
                     crate::error::AppError::Upstream {
                         bad_key_hint: true,
                         ..
-                    }
-                ) {
-                    chat_service.mark_bad(&router, pool_id, &key);
+                    },
+                ) && chat_service.try_demote(&router, pool, pool_id, &key)
+                {
                     retries.push(key_hash);
                     if attempts > max_retries {
                         return Err(e);
@@ -204,6 +223,14 @@ pub async fn chat_completions_handler(
         if !state.circuit_breaker.allow(pool_id, &key_hash) {
             retries.push(key_hash.clone());
             tracing::debug!(%pool_id, %key_hash, "circuit breaker open, skipping key");
+            if attempts > max_retries {
+                return Err(AppError::Upstream {
+                    status: Some(429),
+                    retryable: true,
+                    bad_key_hint: false,
+                    msg: format!("circuit breaker open for pool '{pool_id}'"),
+                });
+            }
             continue;
         }
 
@@ -215,21 +242,37 @@ pub async fn chat_completions_handler(
                     .remove(&(pool_id.to_owned(), key_hash.clone()));
 
                 let elapsed = start.elapsed().unwrap_or_default();
-                state.metrics.record_latency_ms(elapsed.as_millis() as u64);
                 let ts = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as i64;
-                let latency_ms = elapsed.as_millis() as i64;
 
                 match resp {
                     ProviderResponse::Once(ref chat_resp) => {
+                        // Non-streaming: `provider.chat()` returns only after the
+                        // full body has been read, so `elapsed` is the real total
+                        // request latency.  Record it now.
+                        state.metrics.record_latency_ms(elapsed.as_millis() as u64);
+                        let latency_ms = elapsed.as_millis() as i64;
+
                         tracing::debug!(
                             "{} | latency={}ms | pool={}",
                             200,
                             elapsed.as_millis(),
                             pool_id
                         );
+
+                        // Response normalisation (see
+                        // [`crate::response_normalize`]): fold reasoning
+                        // aliases and, as a fallback, pull inlined think
+                        // tags out of `content`.  Done before audit / log
+                        // / cache so every consumer sees the cleaned shape.
+                        let mut normalized = chat_resp.clone();
+                        if state.config.response_normalization.strip_think_tags {
+                            crate::response_normalize::normalize_chat_response(&mut normalized);
+                        }
+
+                        let chat_resp = &normalized;
 
                         let from_provider = provider.extract_audit(&resp);
                         let from_router = AuditFromRouter {
@@ -280,6 +323,7 @@ pub async fn chat_completions_handler(
                             cost_usd: cost,
                         };
                         let _ = db::log_request(&state.db, &log).await;
+                        broadcast_request_log(&log);
 
                         if latency_ms > runtime_policy.alerts.min_latency_ms as i64 {
                             let _ = state.alert_tx.send(AlertEvent::LatencySpike {
@@ -298,6 +342,13 @@ pub async fn chat_completions_handler(
                     }
                     ProviderResponse::Stream { body } => {
                         tracing::debug!("streaming start | model={} | pool={}", req.model, pool_id);
+                        // For streaming we deliberately do NOT touch
+                        // `state.metrics` here: `provider.chat()` resolves
+                        // the moment the upstream response headers arrive
+                        // (TTFB), which is well below the real stream
+                        // duration for any non-trivial completion.  The
+                        // spawned inspector task records the total stream
+                        // time once the body has been fully drained.
                         let stream_response = build_stream_response(
                             StreamContext {
                                 request_id: request_id.clone(),
@@ -306,7 +357,7 @@ pub async fn chat_completions_handler(
                                 pool_id: pool_id.to_owned(),
                                 key_hash,
                                 upstream: provider.base_url().to_owned(),
-                                latency_ms,
+                                request_started_at: started_at,
                                 db_pool: state.db.clone(),
                                 retry_count: retries.len() as i32,
                                 tenant_id: tenant_id.clone(),
@@ -315,6 +366,10 @@ pub async fn chat_completions_handler(
                                 user_agent: user_agent.clone(),
                                 client_ip: client_ip.clone(),
                                 pricing: state.config_store.pricing().await,
+                                metrics: state.metrics.clone(),
+                                normalization: Arc::new(
+                                    state.config.response_normalization.clone(),
+                                ),
                             },
                             body,
                         );
@@ -353,10 +408,22 @@ pub async fn chat_completions_handler(
                 if bad_key_hint
                     && status.is_some_and(|s| runtime_policy.failover.bad_status_codes.contains(&s))
                 {
-                    chat_service.mark_bad(&router, pool_id, &key);
                     state.circuit_breaker.record_failure(pool_id, &key_hash);
-                    state.metrics.inc_key_demotion();
-                    retries.push(key_hash.clone());
+                    if chat_service.try_demote(&router, pool, pool_id, &key) {
+                        state.metrics.inc_key_demotion();
+                        retries.push(key_hash.clone());
+                    } else {
+                        tracing::warn!(
+                            %pool_id, %key_hash, status = ?status,
+                            "last healthy key not demoted; surfacing upstream error"
+                        );
+                        return Err(AppError::Upstream {
+                            status,
+                            retryable: false,
+                            bad_key_hint: false,
+                            msg,
+                        });
+                    }
                 }
 
                 if !retryable {
@@ -428,7 +495,6 @@ pub(crate) fn build_stream_response(
     let inspector_pool = ctx.pool_id.clone();
     let inspector_kh = ctx.key_hash.clone();
     let inspector_up = ctx.upstream.clone();
-    let inspector_lat = ctx.latency_ms;
     let inspector_ts = ctx.ts;
     let inspector_retries = ctx.retry_count;
     let inspector_tenant = ctx.tenant_id.clone();
@@ -438,9 +504,11 @@ pub(crate) fn build_stream_response(
     let inspector_user_agent = ctx.user_agent.clone();
     let inspector_client_ip = ctx.client_ip.clone();
     let inspector_pricing = ctx.pricing.clone();
+    let inspector_metrics = ctx.metrics.clone();
 
     tokio::spawn(async move {
-        let mut inspector = StreamInspector::new();
+        let started_at = ctx.request_started_at;
+        let mut inspector = StreamInspector::new_started_at(started_at);
         let mut buf: Vec<u8> = Vec::new();
 
         while let Some(bytes) = rx.recv().await {
@@ -455,6 +523,14 @@ pub(crate) fn build_stream_response(
             inspector.ingest_chunk(&buf);
         }
 
+        // Total stream latency = request-arrival → stream fully drained.
+        // We do NOT use the value captured at `provider.chat()` return time
+        // (which is just TTFB for streaming requests) — that would silently
+        // make streaming `latency_ms` equal to `ttft_ms` whenever the
+        // upstream buffers its SSE body and flushes at end-of-generation.
+        let latency_ms = started_at.elapsed().as_millis() as i64;
+        inspector_metrics.record_latency_ms(latency_ms.max(0) as u64);
+
         let ttft_ms = inspector.ttft_ms();
         let from_provider = inspector.into_audit();
         let summary = inspector.finalize();
@@ -468,11 +544,12 @@ pub(crate) fn build_stream_response(
         );
 
         tracing::debug!(
-            "streaming end | model={} | prompt_tokens={} | completion_tokens={} | ttft_ms={:?}",
+            "streaming end | model={} | prompt_tokens={} | completion_tokens={} | ttft_ms={:?} | latency_ms={}",
             inspector_model,
             usage.prompt_tokens,
             usage.completion_tokens,
             ttft_ms,
+            latency_ms,
         );
 
         let from_router = AuditFromRouter {
@@ -480,7 +557,7 @@ pub(crate) fn build_stream_response(
             ttft_ms,
         };
         let from_auth = AuditFromAuth {
-            tenant_id: inspector_tenant,
+            tenant_id: inspector_tenant.clone(),
         };
         let audit = AuditDetail {
             from_provider,
@@ -492,12 +569,12 @@ pub(crate) fn build_stream_response(
             id: inspector_id,
             ts: inspector_ts,
             client_ip: inspector_client_ip,
-            model: inspector_model,
+            model: inspector_model.clone(),
             pool_id: inspector_pool,
             key_hash: inspector_kh,
             upstream: Some(inspector_up),
             status_code: Some(200),
-            latency_ms: Some(inspector_lat),
+            latency_ms: Some(latency_ms),
             prompt_tokens: Some(usage.prompt_tokens as i64),
             completion_tokens: Some(usage.completion_tokens as i64),
             total_tokens: Some(usage.total_tokens as i64),
@@ -512,16 +589,29 @@ pub(crate) fn build_stream_response(
         if let Err(e) = db::log_request(&inspector_db, &log).await {
             tracing::error!(error = %e, "failed to write stream log to db");
         }
+        broadcast_request_log(&log);
 
-        if inspector_lat > inspector_min_latency_ms as i64 {
+        if latency_ms > inspector_min_latency_ms as i64 {
             let _ = inspector_alert_tx.send(AlertEvent::LatencySpike {
                 ts: inspector_ts,
                 model: inspector_model_alert,
-                latency_ms: inspector_lat,
+                latency_ms,
                 threshold_ms: inspector_min_latency_ms,
             });
         }
     });
+
+    // Wrap the upstream body in a NormalizingStream when the operator
+    // has opted in to <think> extraction.  This runs BEFORE the
+    // inspect closure below, so the spawned inspector task and the
+    // downstream client both see the cleaned shape — the gateway
+    // never leaks raw <think>…</think> to the client.
+    let body: BoxStream<'static, Result<bytes::Bytes, AppError>> =
+        if ctx.normalization.strip_think_tags {
+            Box::pin(NormalizingStream::new(body))
+        } else {
+            body
+        };
 
     let client_stream = body.map(move |chunk| {
         chunk.inspect(|bytes| {
@@ -554,4 +644,222 @@ pub(crate) fn compute_cost(
     let prompt_cost = usage.prompt_tokens as f64 * price.prompt / 1_000_000.0;
     let completion_cost = usage.completion_tokens as f64 * price.completion / 1_000_000.0;
     Some(prompt_cost + completion_cost)
+}
+
+#[cfg(test)]
+mod tests {
+    //! Regression coverage for the streaming-latency fix.
+    //!
+    //! Before the fix, `latency_ms` for a streaming response was captured at
+    //! `provider.chat()` return — which for a stream is just the time until
+    //! upstream response *headers* arrive (TTFB).  That value happened to be
+    //! identical to `ttft_ms` for any upstream that buffers the entire SSE
+    //! body and flushes it at end-of-generation, so the dashboard showed
+    //! `ttft_ms ≈ latency_ms` for streaming requests.  This test reproduces
+    //! that exact shape — first SSE chunk immediately, second chunk ~300ms
+    //! later — and asserts that `latency_ms` reflects the *total* stream
+    //! duration, not the TTFB.
+
+    use super::*;
+    use crate::config::pricing::PricingConfig;
+    use futures::stream;
+    use sqlx::Row;
+    use std::collections::HashMap;
+    use std::time::Duration;
+    use tempfile::TempDir;
+    use tokio::time::sleep;
+
+    const FIRST_CHUNK: &[u8] =
+        b"data: {\"id\":\"1\",\"model\":\"gpt-4o\",\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n";
+
+    const TRAILING_CHUNK: &[u8] = b"data: {\"id\":\"2\",\"model\":\"gpt-4o\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}\n\n\
+data: [DONE]\n\n";
+
+    async fn build_pool() -> (sqlx::SqlitePool, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.db");
+        let pool = db::connect(path.to_str().unwrap()).await.unwrap();
+        (pool, dir)
+    }
+
+    fn empty_pricing() -> Arc<PricingConfig> {
+        Arc::new(PricingConfig {
+            models: HashMap::new(),
+        })
+    }
+
+    /// Helper: build a body stream that emits FIRST_CHUNK immediately, then
+    /// sleeps for `gap`, then emits TRAILING_CHUNK.
+    fn make_delayed_body(
+        gap: Duration,
+    ) -> futures::stream::BoxStream<'static, Result<bytes::Bytes, AppError>> {
+        Box::pin(stream::unfold(0u8, move |state| async move {
+            match state {
+                0 => Some((Ok(bytes::Bytes::from_static(FIRST_CHUNK)), 1)),
+                1 => {
+                    sleep(gap).await;
+                    Some((Ok(bytes::Bytes::from_static(TRAILING_CHUNK)), 2))
+                }
+                _ => None,
+            }
+        }))
+    }
+
+    async fn fetch_latency_and_ttft(pool: &sqlx::SqlitePool, id: &str) -> (i64, Option<i64>) {
+        // Poll until the spawned inspector task writes the row.
+        let mut last_err = None;
+        for _ in 0..40 {
+            let row = sqlx::query("SELECT latency_ms, ttft_ms FROM request_log WHERE id = ?1")
+                .bind(id)
+                .fetch_optional(pool)
+                .await;
+            match row {
+                Ok(Some(r)) => {
+                    let latency_ms: i64 = r.get("latency_ms");
+                    let ttft_ms: Option<i64> = r.get("ttft_ms");
+                    return (latency_ms, ttft_ms);
+                }
+                Ok(None) => {
+                    sleep(Duration::from_millis(50)).await;
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                    sleep(Duration::from_millis(50)).await;
+                }
+            }
+        }
+        panic!(
+            "timed out waiting for request_log row (id={id}): {:?}",
+            last_err
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_total_latency_is_greater_than_ttft() {
+        let (pool, _dir) = build_pool().await;
+        let metrics = Arc::new(Metrics::default());
+        let (alert_tx, _alert_rx) = broadcast::channel(8);
+
+        let gap = Duration::from_millis(300);
+        let body = make_delayed_body(gap);
+        let id = "stream-lat-1".to_string();
+
+        let ctx = StreamContext {
+            request_id: id.clone(),
+            ts: 0,
+            model: "gpt-4o".into(),
+            pool_id: "pool1".into(),
+            key_hash: "hash".into(),
+            upstream: "https://api.test".into(),
+            request_started_at: Instant::now(),
+            db_pool: pool.clone(),
+            retry_count: 0,
+            tenant_id: "t1".into(),
+            alert_tx,
+            min_latency_ms: 0,
+            user_agent: None,
+            client_ip: None,
+            pricing: empty_pricing(),
+            metrics: metrics.clone(),
+            normalization: Arc::new(ResponseNormalization::default()),
+        };
+
+        let response = build_stream_response(ctx, body);
+        // Consume the body so the spawned inspector task sees bytes flow
+        // through the tx/rx channel and reaches its `db::log_request` call.
+        let _ = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let (latency_ms, ttft_ms) = fetch_latency_and_ttft(&pool, &id).await;
+        let ttft = ttft_ms.expect("ttft_ms should be set for streaming");
+
+        // TTFT should be small (the first chunk arrived quickly).
+        assert!(
+            ttft < latency_ms,
+            "ttft_ms ({ttft}) must be strictly less than latency_ms ({latency_ms})"
+        );
+        // Total latency should at least cover the configured gap, minus a
+        // small jitter allowance.
+        let gap_ms = gap.as_millis() as i64;
+        assert!(
+            latency_ms >= gap_ms - 50,
+            "latency_ms ({latency_ms}) must cover the stream duration (gap={gap_ms}ms)"
+        );
+        // And it must be at least ~100ms more than ttft (the bulk of the gap
+        // is streaming duration).
+        assert!(
+            latency_ms - ttft >= 100,
+            "latency_ms - ttft_ms must be substantial, got {}ms",
+            latency_ms - ttft
+        );
+
+        // Metrics: the spawned task must record latency_ms (the real one),
+        // not the TTFB.
+        let recorded = metrics
+            .request_latency_sum_ms
+            .load(std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            recorded as i64 >= gap_ms - 50,
+            "metrics.record_latency_ms must have been called with the real total, got {recorded}ms"
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_with_no_delay_still_records_distinct_ttft_and_latency() {
+        // Even with zero gap between chunks (upstream flushes the entire SSE
+        // body in one TCP packet), the two metrics must remain distinct
+        // because they measure different things: TTFT is request-arrival →
+        // first parsed SSE line, latency_ms is request-arrival → stream end.
+        let (pool, _dir) = build_pool().await;
+        let metrics = Arc::new(Metrics::default());
+        let (alert_tx, _alert_rx) = broadcast::channel(8);
+
+        let body = make_delayed_body(Duration::from_millis(0));
+        let id = "stream-lat-2".to_string();
+
+        let ctx = StreamContext {
+            request_id: id.clone(),
+            ts: 0,
+            model: "gpt-4o".into(),
+            pool_id: "pool1".into(),
+            key_hash: "hash".into(),
+            upstream: "https://api.test".into(),
+            request_started_at: Instant::now(),
+            db_pool: pool.clone(),
+            retry_count: 0,
+            tenant_id: "t1".into(),
+            alert_tx,
+            min_latency_ms: 0,
+            user_agent: None,
+            client_ip: None,
+            pricing: empty_pricing(),
+            metrics: metrics.clone(),
+            normalization: Arc::new(ResponseNormalization::default()),
+        };
+
+        let response = build_stream_response(ctx, body);
+        let _ = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        let (latency_ms, ttft_ms) = fetch_latency_and_ttft(&pool, &id).await;
+        let ttft = ttft_ms.expect("ttft_ms should be set for streaming");
+        // ttft_ms <= latency_ms, and latency_ms - ttft_ms must be small but
+        // non-negative — the spawn-task bookkeeping adds at least a few ms
+        // of slack, and we record latency at "stream fully drained", which is
+        // always strictly after the first parsed line.
+        assert!(
+            latency_ms >= ttft,
+            "latency_ms ({latency_ms}) must be >= ttft_ms ({ttft})"
+        );
+        // Sanity: the metrics counter was updated with a non-zero value.
+        let recorded = metrics
+            .request_latency_sum_ms
+            .load(std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            recorded > 0,
+            "metrics counter must record a positive latency"
+        );
+    }
 }

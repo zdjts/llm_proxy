@@ -10,7 +10,6 @@
 pub mod aggregator;
 pub mod alerts;
 pub mod audit;
-pub mod audit_trail;
 pub mod auth;
 pub mod auth_store;
 pub mod bootstrap;
@@ -32,6 +31,7 @@ pub mod model_catalog;
 pub mod model_import;
 pub mod provider;
 pub mod ratelimit;
+pub mod response_normalize;
 pub mod router;
 pub mod runtime;
 pub mod server;

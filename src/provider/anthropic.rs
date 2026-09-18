@@ -404,6 +404,8 @@ fn anthropic_to_openai(an: &AnthropicResponse, model: &str) -> ChatCompletionRes
                 content: Some(content_text),
                 tool_calls: None,
                 reasoning_content,
+                reasoning: None,
+                reasoning_text: None,
                 thinking: None,
             },
             finish_reason,
