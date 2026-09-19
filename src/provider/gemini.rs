@@ -48,12 +48,12 @@ impl Provider for GeminiProvider {
 
     async fn chat(
         &self,
-        req: ChatCompletionRequest,
+        req: &ChatCompletionRequest,
         key: &KeyEntry,
     ) -> Result<ProviderResponse, AppError> {
         let stream = req.stream.unwrap_or(false);
         if stream {
-            let gm_req = openai_to_gemini(&req);
+            let gm_req = openai_to_gemini(req);
             let url = format!(
                 "{}/models/{}:streamGenerateContent?alt=sse",
                 self.base_url, req.model
@@ -92,7 +92,7 @@ impl Provider for GeminiProvider {
             let body = super::gemini_stream::relay_gemini_stream(raw_stream, &req.model);
             return Ok(ProviderResponse::Stream { body });
         }
-        let gm_req = openai_to_gemini(&req);
+        let gm_req = openai_to_gemini(req);
         let url = format!("{}/models/{}:generateContent", self.base_url, req.model);
 
         let response = self
@@ -126,15 +126,18 @@ impl Provider for GeminiProvider {
                     bad_key_hint: false,
                     msg: format!("parse error: {e}"),
                 })?;
+            // Parse once; `from_value` consumes the tree so only the small
+            // `usageMetadata` subobject is cloned out beforehand.
+            let raw_usage = raw_body.get("usageMetadata").cloned();
             let gm_resp: GeminiResponse =
-                serde_json::from_value(raw_body.clone()).map_err(|e| AppError::Upstream {
+                serde_json::from_value(raw_body).map_err(|e| AppError::Upstream {
                     status: Some(status),
                     retryable: false,
                     bad_key_hint: false,
                     msg: format!("deserialize error: {e}"),
                 })?;
             let mut chat_resp = gemini_to_openai(&gm_resp, &req.model);
-            chat_resp.raw_usage_json = raw_body.get("usageMetadata").cloned();
+            chat_resp.raw_usage_json = raw_usage;
             Ok(ProviderResponse::Once(chat_resp))
         } else if status >= 500 {
             Err(AppError::Upstream {

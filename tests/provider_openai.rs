@@ -67,7 +67,7 @@ async fn it_forwards_reasoning_parameters_and_preserves_response_fields() {
         "reasoning_effort": "high",
         "thinking": {"type": "enabled", "budget_tokens": 4096}
     });
-    let result = provider.chat(request, &test_key()).await.unwrap();
+    let result = provider.chat(&request, &test_key()).await.unwrap();
 
     match result {
         ProviderResponse::Once(response) => {
@@ -105,7 +105,7 @@ async fn it_preserves_thinking_fields_from_gemini() {
     let mut request = test_request();
     request.model = "gemini".into();
     request.extra = serde_json::json!({"thinkingConfig": {"thinkingBudget": 1024}});
-    let result = provider.chat(request, &test_key()).await.unwrap();
+    let result = provider.chat(&request, &test_key()).await.unwrap();
     match result {
         ProviderResponse::Once(response) => {
             assert_eq!(
@@ -136,7 +136,7 @@ async fn it_returns_once_on_2xx_non_stream() {
         .await;
 
     let provider = test_provider(&server);
-    let result = provider.chat(test_request(), &test_key()).await.unwrap();
+    let result = provider.chat(&test_request(), &test_key()).await.unwrap();
 
     match result {
         ProviderResponse::Once(resp) => {
@@ -163,7 +163,7 @@ async fn it_accepts_openai_compatible_response_without_created() {
         .await;
 
     let provider = test_provider(&server);
-    let result = provider.chat(test_request(), &test_key()).await.unwrap();
+    let result = provider.chat(&test_request(), &test_key()).await.unwrap();
 
     match result {
         ProviderResponse::Once(resp) => {
@@ -192,7 +192,7 @@ async fn it_returns_stream_on_2xx_sse() {
         .await;
 
     let provider = test_provider(&server);
-    let result = provider.chat(test_request(), &test_key()).await.unwrap();
+    let result = provider.chat(&test_request(), &test_key()).await.unwrap();
 
     match result {
         ProviderResponse::Stream { body } => {
@@ -232,7 +232,7 @@ async fn it_returns_bad_key_hint_on_429() {
         .await;
 
     let provider = test_provider(&server);
-    let result = provider.chat(test_request(), &test_key()).await;
+    let result = provider.chat(&test_request(), &test_key()).await;
 
     match result {
         Err(AppError::Upstream {
@@ -260,7 +260,7 @@ async fn it_returns_no_bad_key_hint_on_503() {
         .await;
 
     let provider = test_provider(&server);
-    let result = provider.chat(test_request(), &test_key()).await;
+    let result = provider.chat(&test_request(), &test_key()).await;
 
     match result {
         Err(AppError::Upstream {
@@ -288,7 +288,7 @@ async fn it_passes_through_non_bad_4xx() {
         .await;
 
     let provider = test_provider(&server);
-    let result = provider.chat(test_request(), &test_key()).await;
+    let result = provider.chat(&test_request(), &test_key()).await;
 
     match result {
         Err(AppError::Upstream {
@@ -317,7 +317,7 @@ async fn it_forwards_upstream_400_error_message() {
         .await;
 
     let provider = test_provider(&server);
-    let result = provider.chat(test_request(), &test_key()).await;
+    let result = provider.chat(&test_request(), &test_key()).await;
 
     match result {
         Err(AppError::Upstream {

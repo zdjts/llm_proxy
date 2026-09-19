@@ -1082,6 +1082,7 @@ dependencies = [
  "futures",
  "hex",
  "hmac",
+ "memchr",
  "mockito",
  "rand 0.8.8",
  "reqwest",

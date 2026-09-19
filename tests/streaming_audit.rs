@@ -37,7 +37,7 @@ fn test_key() -> KeyEntry {
 async fn anthropic_connect_error_returns_upstream_err() {
     let codes: Arc<[u16]> = Arc::from([429]);
     let p = AnthropicProvider::new("an".into(), "http://127.0.0.1:1".into(), codes);
-    let result = p.chat(stream_req(), &test_key()).await;
+    let result = p.chat(&stream_req(), &test_key()).await;
     assert!(result.is_err());
 }
 
@@ -45,7 +45,7 @@ async fn anthropic_connect_error_returns_upstream_err() {
 async fn gemini_connect_error_returns_upstream_err() {
     let codes: Arc<[u16]> = Arc::from([429]);
     let p = GeminiProvider::new("gm".into(), "http://127.0.0.1:1".into(), codes);
-    let result = p.chat(stream_req(), &test_key()).await;
+    let result = p.chat(&stream_req(), &test_key()).await;
     assert!(result.is_err());
 }
 

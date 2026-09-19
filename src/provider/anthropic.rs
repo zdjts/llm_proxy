@@ -48,12 +48,12 @@ impl Provider for AnthropicProvider {
 
     async fn chat(
         &self,
-        req: ChatCompletionRequest,
+        req: &ChatCompletionRequest,
         key: &KeyEntry,
     ) -> Result<ProviderResponse, AppError> {
         let stream = req.stream.unwrap_or(false);
         if stream {
-            let an_req = openai_to_anthropic_stream(&req);
+            let an_req = openai_to_anthropic_stream(req);
             let url = format!("{}/messages", self.base_url);
             let resp = self
                 .client
@@ -90,7 +90,7 @@ impl Provider for AnthropicProvider {
             let body = super::anthropic_stream::relay_anthropic_stream(raw_stream, &req.model);
             return Ok(ProviderResponse::Stream { body });
         }
-        let an_req = openai_to_anthropic(&req);
+        let an_req = openai_to_anthropic(req);
         let url = format!("{}/messages", self.base_url);
 
         let response = self
@@ -125,15 +125,18 @@ impl Provider for AnthropicProvider {
                     bad_key_hint: false,
                     msg: format!("parse error: {e}"),
                 })?;
+            // Parse once; `from_value` consumes the tree so only the small
+            // `usage` subobject is cloned out beforehand.
+            let raw_usage = raw_body.get("usage").cloned();
             let an_resp: AnthropicResponse =
-                serde_json::from_value(raw_body.clone()).map_err(|e| AppError::Upstream {
+                serde_json::from_value(raw_body).map_err(|e| AppError::Upstream {
                     status: Some(status),
                     retryable: false,
                     bad_key_hint: false,
                     msg: format!("deserialize error: {e}"),
                 })?;
             let mut chat_resp = anthropic_to_openai(&an_resp, &req.model);
-            chat_resp.raw_usage_json = raw_body.get("usage").cloned();
+            chat_resp.raw_usage_json = raw_usage;
             Ok(ProviderResponse::Once(chat_resp))
         } else if status >= 500 {
             Err(AppError::Upstream {

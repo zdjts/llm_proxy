@@ -86,9 +86,12 @@ pub trait Provider: Send + Sync {
     /// Returns [`ProviderResponse::Once`] for non-streaming or
     /// [`ProviderResponse::Stream`] for streaming responses. Per-chunk errors
     /// are surfaced via `Err(AppError)` inside the stream.
+    ///
+    /// Takes the request by reference so failover retries in the handler do
+    /// not deep-clone a potentially multi-megabyte prompt per attempt.
     async fn chat(
         &self,
-        req: ChatCompletionRequest,
+        req: &ChatCompletionRequest,
         key: &KeyEntry,
     ) -> Result<ProviderResponse, AppError>;
 
@@ -154,7 +157,7 @@ mod tests {
 
         async fn chat(
             &self,
-            _req: ChatCompletionRequest,
+            _req: &ChatCompletionRequest,
             _key: &KeyEntry,
         ) -> Result<ProviderResponse, AppError> {
             self.response.lock().unwrap().take().unwrap()
@@ -220,7 +223,7 @@ mod tests {
             extra: serde_json::Value::Null,
         };
 
-        let result = provider.chat(req, &key).await;
+        let result = provider.chat(&req, &key).await;
         assert!(result.is_ok());
     }
 
@@ -235,7 +238,7 @@ mod tests {
 
         let result = provider
             .chat(
-                ChatCompletionRequest {
+                &ChatCompletionRequest {
                     model: "x".into(),
                     messages: vec![],
                     stream: Some(false),

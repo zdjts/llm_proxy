@@ -65,11 +65,14 @@ impl Provider for OpenAiProvider {
 
     async fn chat(
         &self,
-        req: ChatCompletionRequest,
+        req: &ChatCompletionRequest,
         key: &KeyEntry,
     ) -> Result<ProviderResponse, AppError> {
         let url = format!("{}/chat/completions", self.base_url);
-        let body = serde_json::to_value(&req)
+        // Serialize once to raw bytes; the OpenAI wire format is exactly the
+        // client's request shape (model remap + default params already merged
+        // by the handler), so no JSON tree round-trip is needed.
+        let body = serde_json::to_vec(req)
             .map_err(|e| AppError::Internal(format!("failed to serialize request: {e}")))?;
 
         let response = self
@@ -77,7 +80,7 @@ impl Provider for OpenAiProvider {
             .post(&url)
             .bearer_auth(&key.key)
             .header(axum::http::header::CONTENT_TYPE, "application/json")
-            .json(&body)
+            .body(body)
             .send()
             .await;
 
@@ -118,6 +121,9 @@ impl Provider for OpenAiProvider {
                     body: Box::pin(stream),
                 })
             } else {
+                // `json::<Value>()` then `from_value` (consuming) — the full
+                // response payload is parsed once and moved, not cloned;
+                // only the small `usage` subobject is lifted out beforehand.
                 let raw_body: serde_json::Value =
                     response.json().await.map_err(|e| AppError::Upstream {
                         status: Some(status_code),
@@ -301,7 +307,7 @@ mod tests {
             extra: serde_json::Value::Null,
         };
 
-        let result = p.chat(req, &KeyEntry::api_key("sk-test", 1)).await;
+        let result = p.chat(&req, &KeyEntry::api_key("sk-test", 1)).await;
 
         match result {
             Err(AppError::Upstream {

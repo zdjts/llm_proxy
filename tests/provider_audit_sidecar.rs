@@ -170,7 +170,7 @@ fn default_provider_extract_audit_returns_empty() {
         }
         async fn chat(
             &self,
-            _req: ChatCompletionRequest,
+            _req: &ChatCompletionRequest,
             _key: &KeyEntry,
         ) -> Result<ProviderResponse, llm_proxy::error::AppError> {
             unimplemented!()

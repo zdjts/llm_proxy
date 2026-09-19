@@ -234,7 +234,7 @@ pub async fn chat_completions_handler(
             continue;
         }
 
-        match provider.chat(req.clone(), &key).await {
+        match provider.chat(&req, &key).await {
             Ok(resp) => {
                 state.circuit_breaker.record_success(pool_id, &key_hash);
                 let _ = state
@@ -613,10 +613,22 @@ pub(crate) fn build_stream_response(
             body
         };
 
-    let client_stream = body.map(move |chunk| {
-        chunk.inspect(|bytes| {
-            let _ = tx.try_send(bytes.clone());
-        })
+    // Forward each chunk to the client, and hand a clone to the inspector
+    // task via a bounded channel.  `send().await` applies backpressure: if
+    // the inspector ever falls behind we slow the forwarding instead of
+    // silently dropping chunks (which would corrupt the client's stream).
+    let client_stream = body.then(move |chunk| {
+        let tx = tx.clone();
+        async move {
+            if let Ok(bytes) = &chunk
+                && tx.send(bytes.clone()).await.is_err()
+            {
+                // Inspector task is gone (db write path only); stream
+                // continues to the client without audit collection.
+                tracing::debug!("stream inspector channel closed; continuing without audit");
+            }
+            chunk
+        }
     });
 
     Response::builder()

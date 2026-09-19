@@ -120,3 +120,99 @@ fn it_is_empty_when_new() {
     assert!(cache.is_empty());
     assert_eq!(cache.len(), 0);
 }
+
+fn req_with_messages(model: &str, msgs: serde_json::Value) -> ChatCompletionRequest {
+    ChatCompletionRequest {
+        model: model.into(),
+        messages: serde_json::from_value(msgs).unwrap(),
+        stream: Some(false),
+        max_tokens: None,
+        temperature: Some(0.0),
+        top_p: None,
+        stop: None,
+        presence_penalty: None,
+        frequency_penalty: None,
+        user: None,
+        tools: None,
+        tool_choice: None,
+        stream_options: None,
+        extra: serde_json::Value::Null,
+    }
+}
+
+/// Regression: the key used to cover only the first message, so two
+/// different user prompts sharing a system message collided and the cache
+/// returned the wrong answer.
+#[test]
+fn it_misses_when_user_prompt_differs_but_system_matches() {
+    let req_a = req_with_messages(
+        "gpt-4o",
+        serde_json::json!([
+            {"role": "system", "content": "you are helpful"},
+            {"role": "user", "content": "question A"}
+        ]),
+    );
+    let req_b = req_with_messages(
+        "gpt-4o",
+        serde_json::json!([
+            {"role": "system", "content": "you are helpful"},
+            {"role": "user", "content": "question B"}
+        ]),
+    );
+    assert_ne!(
+        PromptCache::cache_key(&req_a),
+        PromptCache::cache_key(&req_b),
+        "same system + different user prompt must NOT collide"
+    );
+}
+
+#[test]
+fn it_hits_when_full_conversation_matches() {
+    let req_a = req_with_messages(
+        "gpt-4o",
+        serde_json::json!([
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"}
+        ]),
+    );
+    let req_b = req_with_messages(
+        "gpt-4o",
+        serde_json::json!([
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"}
+        ]),
+    );
+    assert_eq!(
+        PromptCache::cache_key(&req_a),
+        PromptCache::cache_key(&req_b)
+    );
+}
+
+#[test]
+fn it_misses_when_roles_swapped() {
+    // Same contents, different order — must not collide.
+    let req_a = req_with_messages(
+        "gpt-4o",
+        serde_json::json!([{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]),
+    );
+    let req_b = req_with_messages(
+        "gpt-4o",
+        serde_json::json!([{"role": "user", "content": "b"}, {"role": "assistant", "content": "a"}]),
+    );
+    assert_ne!(
+        PromptCache::cache_key(&req_a),
+        PromptCache::cache_key(&req_b)
+    );
+}
+
+#[test]
+fn it_misses_for_different_models() {
+    let req_a = test_request("gpt-4o", "hello");
+    let req_b = test_request("gpt-4o-mini", "hello");
+    assert_ne!(
+        PromptCache::cache_key(&req_a),
+        PromptCache::cache_key(&req_b)
+    );
+}

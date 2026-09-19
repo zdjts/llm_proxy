@@ -60,7 +60,7 @@ async fn non_streaming_disabled_leaves_content_intact() {
 
     let provider = test_provider(&server);
     let resp = provider
-        .chat(test_request(false), &test_key())
+        .chat(&test_request(false), &test_key())
         .await
         .unwrap();
     let body = match resp {
@@ -90,7 +90,7 @@ async fn non_streaming_enabled_extracts_think_into_reasoning_content() {
 
     let provider = test_provider(&server);
     let resp = provider
-        .chat(test_request(false), &test_key())
+        .chat(&test_request(false), &test_key())
         .await
         .unwrap();
     let mut body = match resp {
@@ -119,7 +119,7 @@ async fn non_streaming_folds_reasoning_alias() {
 
     let provider = test_provider(&server);
     let resp = provider
-        .chat(test_request(false), &test_key())
+        .chat(&test_request(false), &test_key())
         .await
         .unwrap();
     let mut body = match resp {
@@ -149,7 +149,7 @@ async fn non_streaming_multiple_blocks_become_joined_reasoning() {
 
     let provider = test_provider(&server);
     let resp = provider
-        .chat(test_request(false), &test_key())
+        .chat(&test_request(false), &test_key())
         .await
         .unwrap();
     let mut body = match resp {

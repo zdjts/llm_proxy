@@ -73,9 +73,25 @@ impl StreamInspector {
     ///
     /// Unparseable lines are silently skipped (via `tracing::warn!`).
     /// `data: [DONE]` marks the stream as finished without error.
+    ///
+    /// Long content-delta chunks are the overwhelming majority of any
+    /// stream.  A byte-level pre-filter skips JSON parsing for lines that
+    /// cannot possibly carry usage, finish-reason, or model data, so the
+    /// hot forwarding path stays free of per-chunk deserialization cost.
     pub fn ingest_chunk(&mut self, line: &[u8]) {
         if self.first_chunk_at.is_none() {
             self.first_chunk_at = Some(Instant::now());
+        }
+
+        // Cheap byte pre-filter: only parse JSON for lines containing one
+        // of the fields we track.  A content-delta chunk like
+        // `data: {"choices":[{"delta":{"content":"Hi"}}]}` matches none.
+        const NEEDLES: [&[u8]; 4] = [b"usage", b"finish_reason", b"model", b"[DONE]"];
+        if !NEEDLES
+            .iter()
+            .any(|n| memchr::memmem::find(line, n).is_some())
+        {
+            return;
         }
 
         let line_str = match std::str::from_utf8(line) {
@@ -264,6 +280,39 @@ mod tests {
     fn it_returns_none_ttft_before_any_chunk() {
         let inspector = StreamInspector::new();
         assert!(inspector.ttft_ms().is_none());
+    }
+
+    /// Regression: the byte-level pre-filter must not skip chunks that DO
+    /// carry usage / finish_reason — even when embedded in a big payload.
+    #[test]
+    fn prefilter_still_captures_usage_and_finish_reason() {
+        let mut inspector = StreamInspector::new();
+        // A content-only delta with none of the needle fields: must be
+        // skipped without JSON parsing (no panic, no state change).
+        inspector.ingest_chunk(b"data: {\"choices\":[{\"delta\":{\"content\":\"Hi there\"}}]}");
+        // A final chunk with usage and finish_reason: must be parsed.
+        inspector.ingest_chunk(
+            b"data: {\"model\":\"gpt-4o\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":3,\"total_tokens\":15}}",
+        );
+        let summary = inspector.finalize();
+        let usage = summary.usage.expect("usage chunk must be parsed");
+        assert_eq!(usage.prompt_tokens, 12);
+        assert_eq!(usage.completion_tokens, 3);
+        assert_eq!(summary.finish_reason.as_deref(), Some("stop"));
+        assert_eq!(summary.upstream_model.as_deref(), Some("gpt-4o"));
+    }
+
+    /// The word "usage" can appear inside user content; ensure the filter
+    /// never *wrongly skips* a chunk that merely contains needles in text.
+    /// Over-matching is fine (we just parse and discard); the test asserts
+    /// parsing such a line does not corrupt state.
+    #[test]
+    fn prefilter_overmatch_is_harmless() {
+        let mut inspector = StreamInspector::new();
+        inspector
+            .ingest_chunk(b"data: {\"choices\":[{\"delta\":{\"content\":\"see usage docs\"}}]}");
+        let summary = inspector.finalize();
+        assert!(summary.usage.is_none());
     }
 
     #[test]

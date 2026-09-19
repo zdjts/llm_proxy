@@ -115,14 +115,20 @@ impl<S> NormalizingStream<S> {
             }
             match serde_json::from_str::<Value>(payload) {
                 Ok(mut chunk) if chunk.is_object() => {
-                    if rewrite_chunk_value(&mut self.acc, &mut chunk)
-                        && let Ok(s) = serde_json::to_string(&chunk)
-                    {
-                        let mut out = Vec::with_capacity(s.len() + 8);
-                        out.extend_from_slice(b"data: ");
-                        out.extend_from_slice(s.as_bytes());
-                        out.extend_from_slice(b"\n\n");
-                        return Some(Bytes::from(out));
+                    if rewrite_chunk_value(&mut self.acc, &mut chunk) {
+                        // Only re-serialize when the chunk was actually
+                        // rewritten; pass-through chunks keep their original
+                        // bytes (no per-chunk deserialization cost).
+                        if let Ok(s) = serde_json::to_string(&chunk)
+                            && s != payload
+                        {
+                            let mut out = Vec::with_capacity(s.len() + 8);
+                            out.extend_from_slice(b"data: ");
+                            out.extend_from_slice(s.as_bytes());
+                            out.extend_from_slice(b"\n\n");
+                            return Some(Bytes::from(out));
+                        }
+                        return Some(line.clone());
                     }
                     None
                 }

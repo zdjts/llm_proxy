@@ -5,10 +5,9 @@
 
 use std::time::{Duration, Instant};
 
+use crate::types::{ChatCompletionRequest, ChatCompletionResponse};
 use dashmap::DashMap;
 use sha2::{Digest, Sha256};
-
-use crate::types::{ChatCompletionRequest, ChatCompletionResponse};
 
 const DEFAULT_MAX_ENTRIES: usize = 256;
 
@@ -63,25 +62,34 @@ impl PromptCache {
         self.len() == 0
     }
 
+    /// Cache key = SHA-256 over model + every message (role + content) +
+    /// temperature + tools.  Messages are fed into the hasher
+    /// incrementally via `update` so no multi-megabyte intermediate String
+    /// is ever materialised.
+    ///
+    /// Historical bug: the key only covered the first message, so two
+    /// different user prompts sharing a system message collided and the
+    /// cache returned the wrong answer.  Covering all messages fixes the
+    /// collision at the same time as the performance cost.
     pub fn cache_key(req: &ChatCompletionRequest) -> String {
-        let first_content = req
-            .messages
-            .first()
-            .and_then(|m| serde_json::to_string(&m.content).ok())
-            .unwrap_or_default();
-
-        let raw = if req.messages.first().is_some_and(|m| m.role == "system") {
-            let sys_content = req
-                .messages
-                .first()
-                .and_then(|m| serde_json::to_string(&m.content).ok())
-                .unwrap_or_default();
-            format!("{}{}{}", req.model, sys_content, first_content)
-        } else {
-            format!("{}{}", req.model, first_content)
-        };
-
-        let digest = Sha256::digest(raw.as_bytes());
+        let mut hasher = Sha256::new();
+        hasher.update(req.model.as_bytes());
+        hasher.update([0xff]); // field separator
+        for m in &req.messages {
+            hasher.update(m.role.as_bytes());
+            hasher.update([0xff]);
+            // Feed the JSON encoding of content incrementally.  For the
+            // dominant string case this hashes the raw text without
+            // allocating a new buffer; serde's string escaping is byte-wise
+            // and never copies the full payload into one String.
+            hasher.update(serde_json::to_vec(&m.content).unwrap_or_default());
+            hasher.update([0xff]);
+        }
+        hasher.update([0xff]);
+        hasher.update(req.temperature.map(|t| t.to_string()).unwrap_or_default());
+        hasher.update([0xff]);
+        hasher.update(serde_json::to_vec(&req.tools).unwrap_or_default());
+        let digest = hasher.finalize();
         digest.iter().take(6).map(|b| format!("{b:02x}")).collect()
     }
 
