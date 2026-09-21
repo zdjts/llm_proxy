@@ -166,6 +166,7 @@ const zhCN: Messages = {
     thStatus: '状态',
     thTokens: 'Token（输入/输出/缓存）',
     thLatency: '延迟',
+    thTtft: '首字延迟',
     thRetry: '重试',
     thError: '错误',
     thCost: '成本',

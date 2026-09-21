@@ -66,6 +66,7 @@ impl ModelCatalog {
                     input_types,
                     reasoning,
                     thinking_levels,
+                    thinking_level_map,
                     supports_tools,
                     supports_vision,
                     pricing,
@@ -79,6 +80,7 @@ impl ModelCatalog {
                         .and_then(|value| value.get("reasoning"))
                         .and_then(serde_json::Value::as_bool)
                         .unwrap_or(metadata.reasoning);
+                    let level_map = registry_thinking_level_map(caps.as_ref());
                     let registry_thinking_levels = reasoning_thinking_levels(caps.as_ref());
                     let input_types = if entry.supports_vision {
                         vec!["text".into(), "image".into()]
@@ -96,6 +98,7 @@ impl ModelCatalog {
                         } else {
                             registry_thinking_levels
                         },
+                        level_map,
                         entry.supports_tool_calling,
                         entry.supports_vision,
                         ModelMetadataPricing {
@@ -121,6 +124,7 @@ impl ModelCatalog {
                         metadata.input_types,
                         metadata.reasoning,
                         metadata.thinking_levels,
+                        None,
                         metadata.supports_tools,
                         metadata.supports_vision,
                         ModelMetadataPricing {
@@ -139,6 +143,11 @@ impl ModelCatalog {
                         },
                     )
                 };
+                // Full map wins; otherwise derive an identity map from the
+                // advertised levels so clients never have to guess the wire
+                // values (they equal the canonical level names).
+                let thinking_level_map =
+                    thinking_level_map.or_else(|| identity_thinking_level_map(&thinking_levels));
                 ModelMetadata {
                     id,
                     name,
@@ -147,6 +156,7 @@ impl ModelCatalog {
                     input_types,
                     reasoning,
                     thinking_levels,
+                    thinking_level_map,
                     supports_tools,
                     supports_vision,
                     pricing,
@@ -174,9 +184,23 @@ fn translate_reasoning_effort(
         .pointer("/metadata/thinkingLevelMap")
         .and_then(|v| v.as_object())
     else {
+        // No per-model map: the caller knows this model's vocabulary and the
+        // gateway must not second-guess it.  Pass the level through verbatim.
         return Ok(());
     };
-    let Some(upstream_level) = level_map.get(reasoning_effort) else {
+    // Canonicalise the requested level so `off` (pi) finds the `none` entry
+    // (xAI-style catalogs) written by older imports: map keys are matched by
+    // canonical form, not byte equality.
+    let Some(requested) = canonical_thinking_level(reasoning_effort) else {
+        // Not a canonical level — a provider-specific value the client set
+        // deliberately.  The gateway is not a vocabulary police: pass through.
+        return Ok(());
+    };
+    let upstream_level = level_map
+        .iter()
+        .find(|(key, _)| canonical_thinking_level(key) == Some(requested))
+        .map(|(_, value)| value);
+    let Some(upstream_level) = upstream_level else {
         return Err(AppError::BadRequest(format!(
             "model '{}' does not support reasoning_effort='{}'",
             entry.id, reasoning_effort
@@ -197,6 +221,22 @@ fn translate_reasoning_effort(
     Ok(())
 }
 
+/// Identity map from advertised canonical levels to themselves, used when a
+/// model declares `thinking_levels` without a per-level wire-value map.
+fn identity_thinking_level_map(
+    levels: &[String],
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    if levels.is_empty() {
+        return None;
+    }
+    Some(
+        levels
+            .iter()
+            .map(|level| (level.clone(), serde_json::Value::String(level.clone())))
+            .collect(),
+    )
+}
+
 fn catalog_cost(caps: Option<&serde_json::Value>, field: &str, fallback: f64) -> f64 {
     caps.and_then(|value| value.pointer(&format!("/metadata/cost/{field}")))
         .and_then(serde_json::Value::as_f64)
@@ -204,14 +244,58 @@ fn catalog_cost(caps: Option<&serde_json::Value>, field: &str, fallback: f64) ->
         .unwrap_or(fallback)
 }
 
+/// Canonical pi/gateway thinking levels, in ascending effort order.
+pub const THINKING_LEVEL_ORDER: &[&str] =
+    &["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/// Map a catalog level name to its canonical form.
+///
+/// models.dev spells the "thinking disabled" effort value `none` (xAI, hy4),
+/// while pi and the gateway metadata API use `off`.  Everything else that is
+/// already canonical passes through; unknown names return `None`.
+pub fn canonical_thinking_level(level: &str) -> Option<&'static str> {
+    match level {
+        "none" => Some("off"),
+        other => THINKING_LEVEL_ORDER
+            .iter()
+            .find(|canonical| **canonical == other)
+            .copied(),
+    }
+}
+
+/// Extract the per-model `canonical level → upstream wire value` map from a
+/// `model_registry` capabilities blob.
+///
+/// Keys are canonicalised (`none` → `off`) so rows written by older imports
+/// behave identically to rows written after [`crate::model_import`] started
+/// canonicalising at import time.  Values are passed through verbatim: they
+/// are what the upstream API expects in `reasoning_effort`.
+fn registry_thinking_level_map(
+    caps: Option<&serde_json::Value>,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let map = caps
+        .and_then(|v| v.pointer("/metadata/thinkingLevelMap"))
+        .and_then(serde_json::Value::as_object)?;
+    let mut out = serde_json::Map::new();
+    for (key, value) in map {
+        if value.is_null() {
+            continue;
+        }
+        if let Some(canonical) = canonical_thinking_level(key) {
+            out.insert(canonical.to_owned(), value.clone());
+        }
+    }
+    if out.is_empty() { None } else { Some(out) }
+}
+
+/// Legacy list-shaped view of the map, for YAML-configured models that only
+/// declare `thinking_levels` (identity mapping) instead of a full map.
 fn reasoning_thinking_levels(caps: Option<&serde_json::Value>) -> Vec<String> {
-    caps.and_then(|v| v.pointer("/metadata/thinkingLevelMap"))
-        .and_then(serde_json::Value::as_object)
+    registry_thinking_level_map(caps)
         .map(|map| {
-            const ORDER: &[&str] = &["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-            ORDER
+            THINKING_LEVEL_ORDER
                 .iter()
-                .filter(|level| map.get(**level).is_some_and(|value| !value.is_null()))
+                .filter(|level| map.contains_key(**level))
                 .map(|level| (*level).to_owned())
                 .collect::<Vec<_>>()
         })
@@ -286,5 +370,84 @@ mod tests {
         let mut extra = serde_json::json!({"reasoning_effort": "high"});
         translate_reasoning_effort(&e, &mut extra).unwrap();
         assert_eq!(extra["reasoning_effort"], "high");
+    }
+
+    #[test]
+    fn canonicalises_off_against_legacy_none_keyed_map() {
+        // Pre-canonicalisation import rows store xAI-style `none` keys; a pi
+        // `off` request must still find (and translate to) the wire value.
+        let e = entry(
+            "grok-4.6",
+            serde_json::json!({
+                "metadata": {"thinkingLevelMap": {"none": "none", "low": "low", "high": "high"}}
+            }),
+        );
+        let mut extra = serde_json::json!({"reasoning_effort": "off"});
+        translate_reasoning_effort(&e, &mut extra).unwrap();
+        assert_eq!(extra["reasoning_effort"], "none");
+    }
+
+    #[test]
+    fn passes_through_provider_specific_effort_values() {
+        // `reasoning_effort` values outside the canonical vocabulary are the
+        // client's deliberate choice; the gateway must not rewrite them.
+        let e = entry(
+            "grok-4.6",
+            serde_json::json!({
+                "metadata": {"thinkingLevelMap": {"low": "low"}}
+            }),
+        );
+        let mut extra = serde_json::json!({"reasoning_effort": "turbo"});
+        translate_reasoning_effort(&e, &mut extra).unwrap();
+        assert_eq!(extra["reasoning_effort"], "turbo");
+    }
+
+    #[test]
+    fn canonical_level_missing_from_map_is_rejected() {
+        // A canonical level absent from the map is unsupported for this
+        // model — surface that as a 400 instead of a confusing upstream 4xx.
+        let e = entry(
+            "hy4-preview",
+            serde_json::json!({
+                "metadata": {"thinkingLevelMap": {"high": "high", "off": "none"}}
+            }),
+        );
+        let mut extra = serde_json::json!({"reasoning_effort": "low"});
+        let err = translate_reasoning_effort(&e, &mut extra).unwrap_err();
+        assert!(matches!(err, crate::error::AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn canonical_thinking_level_aliases_and_passes_through() {
+        use super::canonical_thinking_level;
+        assert_eq!(canonical_thinking_level("none"), Some("off"));
+        assert_eq!(canonical_thinking_level("off"), Some("off"));
+        assert_eq!(canonical_thinking_level("xhigh"), Some("xhigh"));
+        assert_eq!(canonical_thinking_level("turbo"), None);
+    }
+
+    #[test]
+    fn registry_map_drops_null_entries_and_unknown_keys() {
+        use super::registry_thinking_level_map;
+        let value = serde_json::json!({
+            "metadata": {"thinkingLevelMap": {
+                "none": "none", "low": "low", "minimal": null, "turbo": "turbo"
+            }}
+        });
+        let map = registry_thinking_level_map(Some(&value)).unwrap();
+        assert_eq!(map.len(), 2);
+        assert_eq!(map["off"], "none");
+        assert_eq!(map["low"], "low");
+        assert!(map.get("minimal").is_none());
+        assert!(map.get("turbo").is_none());
+    }
+
+    #[test]
+    fn identity_map_from_levels() {
+        use super::identity_thinking_level_map;
+        assert!(identity_thinking_level_map(&[]).is_none());
+        let map = identity_thinking_level_map(&["low".into(), "high".into()]).unwrap();
+        assert_eq!(map["low"], "low");
+        assert_eq!(map["high"], "high");
     }
 }

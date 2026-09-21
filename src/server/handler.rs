@@ -161,6 +161,16 @@ pub async fn chat_completions_handler(
     let (provider, pool, pool_id, default_params, upstream_model) =
         chat_service.resolve(&router, &model)?;
 
+    // Per-model thinking-level translation. Must run before the model id is
+    // remapped to the upstream name: the model_registry is keyed by the
+    // client-facing logical name. Translation rewrites canonical pi levels
+    // (`off`, `low`, …) into the upstream wire value from the catalog's
+    // thinkingLevelMap, and rejects levels the model does not support.
+    state
+        .catalog
+        .translate_reasoning_effort(&model, &mut req)
+        .await?;
+
     if let Some(upstream) = upstream_model {
         req.model = upstream.to_owned();
     }
@@ -648,14 +658,12 @@ pub(crate) fn compute_cost(
     usage: Option<&crate::types::Usage>,
 ) -> Option<f64> {
     let usage = usage?;
-    let accounting = pricing.accounting();
-    let price = accounting.lookup(model, Some(tenant));
-    if price.prompt == 0.0 && price.completion == 0.0 {
-        return None;
-    }
-    let prompt_cost = usage.prompt_tokens as f64 * price.prompt / 1_000_000.0;
-    let completion_cost = usage.completion_tokens as f64 * price.completion / 1_000_000.0;
-    Some(prompt_cost + completion_cost)
+    pricing.accounting().cost_usd(
+        model,
+        Some(tenant),
+        usage.prompt_tokens as i64,
+        usage.completion_tokens as i64,
+    )
 }
 
 #[cfg(test)]
@@ -865,13 +873,20 @@ data: [DONE]\n\n";
             latency_ms >= ttft,
             "latency_ms ({latency_ms}) must be >= ttft_ms ({ttft})"
         );
-        // Sanity: the metrics counter was updated with a non-zero value.
+        // Sanity: the metrics counter was updated with the same total.
+        //
+        // This must equal `latency_ms`, not be merely positive: on a fast
+        // machine the whole stream can complete in under 1ms, making
+        // `latency_ms == 0`. Asserting `> 0` made this test flaky; asserting
+        // equality pins the real invariant (the counter receives the total
+        // stream duration, whatever it happens to be).
         let recorded = metrics
             .request_latency_sum_ms
             .load(std::sync::atomic::Ordering::Relaxed);
-        assert!(
-            recorded > 0,
-            "metrics counter must record a positive latency"
+        assert_eq!(
+            recorded,
+            latency_ms.max(0) as u64,
+            "metrics counter must receive the total stream latency"
         );
     }
 }

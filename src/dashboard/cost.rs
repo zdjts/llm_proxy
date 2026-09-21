@@ -139,19 +139,20 @@ async fn query_cost(
     .await
     .map_err(|e| AppError::Internal(format!("cost query: {e}")))?;
 
+    let accounting = config.accounting();
     let mut result: Vec<CostRow> = rows
         .into_iter()
         .map(|r| {
-            let accounting = config.accounting();
-            let price = accounting.lookup(&r.model, q.tenant.as_deref());
-            let prompt_price = price.prompt / 1_000_000.0;
-            let completion_price = price.completion / 1_000_000.0;
-            let cost = if prompt_price > 0.0 || completion_price > 0.0 {
-                let c = r.prompt_tokens as f64 * prompt_price
-                    + r.completion_tokens as f64 * completion_price;
-                format!("${c:.6}")
-            } else {
-                "?".into()
+            // Shared with the usage screen and the request logger: keeps the
+            // per-1M-token unit conversion in exactly one place.
+            let cost = match accounting.cost_usd(
+                &r.model,
+                q.tenant.as_deref(),
+                r.prompt_tokens,
+                r.completion_tokens,
+            ) {
+                Some(c) => format!("${c:.6}"),
+                None => "?".into(),
             };
             CostRow {
                 model: r.model,
@@ -231,16 +232,21 @@ async fn query_cost_stats(
     };
 
     let rows = query_cost(pool, config, q).await?;
+    let accounting = config.accounting();
     let total_cost = if rows.is_empty() {
         "—".into()
     } else {
         let sum: f64 = rows
             .iter()
             .map(|r| {
-                let accounting = config.accounting();
-                let price = accounting.lookup(&r.model, q.tenant.as_deref());
-                r.prompt_tokens as f64 * price.prompt / 1_000_000.0
-                    + r.completion_tokens as f64 * price.completion / 1_000_000.0
+                accounting
+                    .cost_usd(
+                        &r.model,
+                        q.tenant.as_deref(),
+                        r.prompt_tokens,
+                        r.completion_tokens,
+                    )
+                    .unwrap_or(0.0)
             })
             .sum();
         if sum > 0.0 {

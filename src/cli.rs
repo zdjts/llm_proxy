@@ -113,6 +113,81 @@ Gateway URL is inferred from config.yaml (server.host:port) unless you pass --ba
             #[command(subcommand)]
             action: OauthAction,
         },
+        /// Inspect and manage accounting prices (`pricing_override`).
+        ///
+        /// Effective price resolution, highest priority first:
+        ///   1. pricing_override for (model, tenant)
+        ///   2. pricing_override for model with tenant_id NULL
+        ///   3. `pricing:` section of config.yaml
+        ///   4. model_registry catalog price (from `import-models`)
+        Pricing {
+            #[command(subcommand)]
+            action: PricingAction,
+        },
+    }
+
+    #[derive(Subcommand, Debug)]
+    enum PricingAction {
+        /// Show the effective price per model, and which layer supplied it.
+        List {
+            /// SQLite database path. Default: db.path in config.yaml.
+            #[arg(long, value_name = "FILE", default_value_t = default_db_path())]
+            db: String,
+            /// Only show this model.
+            #[arg(long, value_name = "MODEL")]
+            model: Option<String>,
+        },
+        /// Write a `pricing_override` row (upsert on model + tenant).
+        Set {
+            /// Model id (must exist in model_registry for the catalog layer).
+            #[arg(long, value_name = "MODEL")]
+            model: String,
+            /// USD per 1M input (prompt) tokens.
+            #[arg(long, value_name = "USD")]
+            input: f64,
+            /// USD per 1M output (completion) tokens.
+            #[arg(long, value_name = "USD")]
+            output: f64,
+            /// Tenant this price applies to. Omit for all tenants.
+            #[arg(long, value_name = "TENANT")]
+            tenant: Option<String>,
+            /// Override starts now instead of being effective immediately.
+            #[arg(long, value_name = "EPOCH_MS")]
+            effective_from: Option<i64>,
+            /// Override ends at this epoch-ms timestamp (omit = never).
+            #[arg(long, value_name = "EPOCH_MS")]
+            effective_until: Option<i64>,
+            /// SQLite database path. Default: db.path in config.yaml.
+            #[arg(long, value_name = "FILE", default_value_t = default_db_path())]
+            db: String,
+        },
+        /// Drop `pricing_override` rows so the catalog/YAML price applies again.
+        Unset {
+            #[arg(long, value_name = "MODEL")]
+            model: String,
+            /// Only drop the row for this tenant (omit = drop every row for the model).
+            #[arg(long, value_name = "TENANT")]
+            tenant: Option<String>,
+            /// SQLite database path. Default: db.path in config.yaml.
+            #[arg(long, value_name = "FILE", default_value_t = default_db_path())]
+            db: String,
+        },
+        /// Backfill `request_log.cost_usd` for rows where it is NULL.
+        ///
+        /// Recomputes cost from stored token counts using the effective price
+        /// at the time of the run. Rows whose model has no price in any layer
+        /// are left NULL.
+        Backfill {
+            /// SQLite database path. Default: db.path in config.yaml.
+            #[arg(long, value_name = "FILE", default_value_t = default_db_path())]
+            db: String,
+            /// Only recompute rows whose cost is already set (re-price history).
+            #[arg(long, default_value_t = false)]
+            overwrite: bool,
+            /// Print what would change without writing.
+            #[arg(long, default_value_t = false)]
+            dry_run: bool,
+        },
     }
 
     #[derive(Subcommand, Debug)]
@@ -625,6 +700,63 @@ Gateway URL is inferred from config.yaml (server.host:port) unless you pass --ba
                     );
                 }
             }
+            Commands::Pricing { action } => match action {
+                PricingAction::List { db, model } => {
+                    let runtime =
+                        tokio::runtime::Runtime::new().map_err(|e| format!("runtime: {e}"))?;
+                    runtime.block_on(async { pricing_list(&db, model.as_deref()).await })?;
+                }
+                PricingAction::Set {
+                    model,
+                    input,
+                    output,
+                    tenant,
+                    effective_from,
+                    effective_until,
+                    db,
+                } => {
+                    if input < 0.0 || !input.is_finite() || output < 0.0 || !output.is_finite() {
+                        return Err(
+                            "--input/--output must be finite, non-negative numbers".to_string()
+                        );
+                    }
+                    if let (Some(from), Some(until)) = (effective_from, effective_until)
+                        && until <= from
+                    {
+                        return Err("--effective-until must be after --effective-from".to_string());
+                    }
+                    let runtime =
+                        tokio::runtime::Runtime::new().map_err(|e| format!("runtime: {e}"))?;
+                    let from = effective_from.unwrap_or_else(now_ms);
+                    runtime.block_on(async {
+                        pricing_set(
+                            &db,
+                            &model,
+                            input,
+                            output,
+                            tenant.as_deref(),
+                            from,
+                            effective_until,
+                        )
+                        .await
+                    })?;
+                }
+                PricingAction::Unset { model, tenant, db } => {
+                    let runtime =
+                        tokio::runtime::Runtime::new().map_err(|e| format!("runtime: {e}"))?;
+                    runtime
+                        .block_on(async { pricing_unset(&db, &model, tenant.as_deref()).await })?;
+                }
+                PricingAction::Backfill {
+                    db,
+                    overwrite,
+                    dry_run,
+                } => {
+                    let runtime =
+                        tokio::runtime::Runtime::new().map_err(|e| format!("runtime: {e}"))?;
+                    runtime.block_on(async { pricing_backfill(&db, overwrite, dry_run).await })?;
+                }
+            },
             Commands::Oauth { action } => match action {
                 OauthAction::Login {
                     issuer,
@@ -795,6 +927,271 @@ Gateway URL is inferred from config.yaml (server.host:port) unless you pass --ba
             .filter(|s| !s.is_empty())
             .or_else(base_url_from_config)
             .unwrap_or_else(|| "http://127.0.0.1:8080".into())
+    }
+
+    fn now_ms() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64
+    }
+
+    /// Open SQLite and build the effective price table the gateway would use.
+    ///
+    /// Deliberately reuses [`llm_proxy::config_store::ConfigStore`] so the CLI
+    /// and the running gateway cannot disagree about prices.
+    async fn effective_pricing(
+        db: &str,
+    ) -> Result<
+        (
+            sqlx::SqlitePool,
+            std::sync::Arc<llm_proxy::config::pricing::PricingConfig>,
+        ),
+        String,
+    > {
+        let pool = sqlx::SqlitePool::connect(&format!("sqlite://{db}"))
+            .await
+            .map_err(|e| format!("database: {e}"))?;
+        let store = llm_proxy::config_store::ConfigStore::load(pool.clone())
+            .await
+            .map_err(|e| format!("config store: {e}"))?;
+        let pricing = store.pricing().await;
+        Ok((pool, pricing))
+    }
+
+    /// Label the layer that supplied a model's price, for `pricing list`.
+    async fn pricing_source(pool: &sqlx::SqlitePool, model: &str) -> Result<&'static str, String> {
+        let has_tenant_override: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM pricing_override WHERE model_id = ?1 AND tenant_id IS NOT NULL)",
+        )
+        .bind(model)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("pricing_override probe: {e}"))?;
+        if has_tenant_override {
+            return Ok("override(tenant)");
+        }
+        let has_global_override: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM pricing_override WHERE model_id = ?1 AND tenant_id IS NULL)",
+        )
+        .bind(model)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("pricing_override probe: {e}"))?;
+        if has_global_override {
+            return Ok("override(global)");
+        }
+        let _ = model;
+        Ok("catalog")
+    }
+
+    async fn pricing_list(db: &str, only_model: Option<&str>) -> Result<(), String> {
+        let (pool, pricing) = effective_pricing(db).await?;
+
+        let models: Vec<String> = match only_model {
+            Some(m) => vec![m.to_string()],
+            None => sqlx::query_scalar("SELECT id FROM model_registry ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| format!("model_registry: {e}"))?,
+        };
+
+        println!(
+            "{:<34} {:>10} {:>10}  SOURCE",
+            "MODEL", "INPUT/1M", "OUTPUT/1M"
+        );
+        for model in &models {
+            let price = pricing.lookup(model, None);
+            let source = pricing_source(&pool, model).await?;
+            let source = if price.prompt == 0.0 && price.completion == 0.0 {
+                "unpriced"
+            } else {
+                source
+            };
+            println!(
+                "{:<34} {:>10.4} {:>10.4}  {}",
+                model, price.prompt, price.completion, source
+            );
+        }
+        println!(
+            "\nLayers (highest priority first): pricing_override(tenant) > \
+             pricing_override(global) > config.yaml pricing: > model_registry"
+        );
+        Ok(())
+    }
+
+    async fn pricing_set(
+        db: &str,
+        model: &str,
+        input: f64,
+        output: f64,
+        tenant: Option<&str>,
+        effective_from: i64,
+        effective_until: Option<i64>,
+    ) -> Result<(), String> {
+        let pool = sqlx::SqlitePool::connect(&format!("sqlite://{db}"))
+            .await
+            .map_err(|e| format!("database: {e}"))?;
+
+        // Upsert on (model_id, tenant_id): re-pricing the same target replaces
+        // the previous row instead of stacking multiple active overrides.
+        // NULL tenant_id is not comparable with `=`, hence the IS branch.
+        let existing: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM pricing_override WHERE model_id = ?1 AND \
+             ((?2 IS NULL AND tenant_id IS NULL) OR tenant_id = ?2)",
+        )
+        .bind(model)
+        .bind(tenant)
+        .fetch_optional(&pool)
+        .await
+        .map_err(|e| format!("pricing_override lookup: {e}"))?;
+
+        let updated_at = now_ms();
+        match existing {
+            Some(id) => {
+                sqlx::query(
+                    "UPDATE pricing_override SET input_price_per_1m=?1, output_price_per_1m=?2, \
+                     effective_from=?3, effective_until=?4, updated_at=?5 WHERE id=?6",
+                )
+                .bind(input)
+                .bind(output)
+                .bind(effective_from)
+                .bind(effective_until)
+                .bind(updated_at)
+                .bind(id)
+                .execute(&pool)
+                .await
+                .map_err(|e| format!("pricing_override update: {e}"))?;
+            }
+            None => {
+                sqlx::query(
+                    "INSERT INTO pricing_override \
+                     (model_id, tenant_id, input_price_per_1m, output_price_per_1m, \
+                      effective_from, effective_until, created_at, updated_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+                )
+                .bind(model)
+                .bind(tenant)
+                .bind(input)
+                .bind(output)
+                .bind(effective_from)
+                .bind(effective_until)
+                .bind(updated_at)
+                .execute(&pool)
+                .await
+                .map_err(|e| format!("pricing_override insert: {e}"))?;
+            }
+        }
+
+        println!(
+            "set {} input={} output={} tenant={} from={} until={}",
+            model,
+            input,
+            output,
+            tenant.unwrap_or("*"),
+            effective_from,
+            effective_until
+                .map(|u| u.to_string())
+                .unwrap_or_else(|| "never".into())
+        );
+        println!("run `llm_proxy_cli reload` (or wait for the poller) to apply");
+        Ok(())
+    }
+
+    async fn pricing_unset(db: &str, model: &str, tenant: Option<&str>) -> Result<(), String> {
+        let pool = sqlx::SqlitePool::connect(&format!("sqlite://{db}"))
+            .await
+            .map_err(|e| format!("database: {e}"))?;
+
+        let result = match tenant {
+            Some(t) => {
+                sqlx::query("DELETE FROM pricing_override WHERE model_id = ?1 AND tenant_id = ?2")
+                    .bind(model)
+                    .bind(t)
+                    .execute(&pool)
+                    .await
+            }
+            None => {
+                sqlx::query("DELETE FROM pricing_override WHERE model_id = ?1")
+                    .bind(model)
+                    .execute(&pool)
+                    .await
+            }
+        }
+        .map_err(|e| format!("pricing_override delete: {e}"))?;
+
+        println!(
+            "removed {} override row(s) for {} (tenant={})",
+            result.rows_affected(),
+            model,
+            tenant.unwrap_or("*")
+        );
+        Ok(())
+    }
+
+    /// Recompute `request_log.cost_usd` from stored token counts.
+    ///
+    /// Only `request_log` is rewritten: `audit_hourly.cost_usd` is a redundant
+    /// aggregate that no dashboard query reads (the cost screens recompute from
+    /// token counts), so the aggregator will restate it on its next hourly pass.
+    async fn pricing_backfill(db: &str, overwrite: bool, dry_run: bool) -> Result<(), String> {
+        let (pool, pricing) = effective_pricing(db).await?;
+        let accounting = pricing.accounting();
+
+        #[derive(sqlx::FromRow)]
+        struct Row {
+            id: String,
+            model: String,
+            tenant_id: Option<String>,
+            prompt_tokens: Option<i64>,
+            completion_tokens: Option<i64>,
+        }
+
+        let where_clause = if overwrite {
+            "prompt_tokens IS NOT NULL AND completion_tokens IS NOT NULL"
+        } else {
+            "cost_usd IS NULL AND prompt_tokens IS NOT NULL AND completion_tokens IS NOT NULL"
+        };
+        let rows: Vec<Row> = sqlx::query_as(&format!(
+            "SELECT id, model, tenant_id, prompt_tokens, completion_tokens \
+             FROM request_log WHERE {where_clause}"
+        ))
+        .fetch_all(&pool)
+        .await
+        .map_err(|e| format!("request_log scan: {e}"))?;
+
+        let mut priced = 0u64;
+        let mut unpriced = 0u64;
+        let mut total = 0.0f64;
+
+        for r in &rows {
+            let prompt = r.prompt_tokens.unwrap_or(0);
+            let completion = r.completion_tokens.unwrap_or(0);
+            match accounting.cost_usd(&r.model, r.tenant_id.as_deref(), prompt, completion) {
+                Some(cost) => {
+                    priced += 1;
+                    total += cost;
+                    if !dry_run {
+                        sqlx::query("UPDATE request_log SET cost_usd = ?1 WHERE id = ?2")
+                            .bind(cost)
+                            .bind(&r.id)
+                            .execute(&pool)
+                            .await
+                            .map_err(|e| format!("request_log update: {e}"))?;
+                    }
+                }
+                None => unpriced += 1,
+            }
+        }
+
+        println!(
+            "{}{} rows priced (total ${:.6}), {} left NULL (no price in any layer)",
+            if dry_run { "[dry-run] " } else { "" },
+            priced,
+            total,
+            unpriced
+        );
+        Ok(())
     }
 
     fn default_db_path() -> String {

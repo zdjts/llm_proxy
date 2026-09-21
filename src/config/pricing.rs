@@ -61,6 +61,28 @@ impl<'a> AccountingPricing<'a> {
     pub fn lookup(&self, model: &str, tenant: Option<&str>) -> &PriceEntry {
         self.config.lookup(model, tenant)
     }
+
+    /// Cost in USD for a request that consumed `prompt`/`completion` tokens.
+    ///
+    /// Returns `None` when the model resolves to a zero price in every layer,
+    /// which callers must preserve as SQL NULL rather than writing 0.0 —
+    /// "unpriced" and "free" are different facts.
+    pub fn cost_usd(
+        &self,
+        model: &str,
+        tenant: Option<&str>,
+        prompt_tokens: i64,
+        completion_tokens: i64,
+    ) -> Option<f64> {
+        let price = self.lookup(model, tenant);
+        if price.prompt == 0.0 && price.completion == 0.0 {
+            return None;
+        }
+        Some(
+            prompt_tokens as f64 * price.prompt / 1_000_000.0
+                + completion_tokens as f64 * price.completion / 1_000_000.0,
+        )
+    }
 }
 
 impl PricingConfig {

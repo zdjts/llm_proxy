@@ -9,6 +9,7 @@ use serde_json::Value;
 use sqlx::SqlitePool;
 
 use crate::error::AppError;
+use crate::model_catalog::canonical_thinking_level;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ImportCounts {
@@ -452,6 +453,15 @@ fn sensitive(k: &str) -> bool {
     .iter()
     .any(|x| n.contains(x))
 }
+/// Build the per-model `canonical level → upstream wire value` map from a
+/// models.dev `reasoning_options` array.
+///
+/// Keys are canonicalised to pi/gateway vocabulary: models.dev spells the
+/// "thinking disabled" effort value `none` for some catalogs (xAI, hy4),
+/// which canonicalises to `off`.  Other canonical levels pass through; any
+/// value outside the canonical set is dropped rather than stored under a key
+/// no consumer can name.  Values are preserved verbatim — they are the wire
+/// values the upstream API expects in `reasoning_effort`.
 fn thinking_level_map(model: &Value) -> Option<Value> {
     let options = model.get("reasoning_options")?.as_array()?;
     let effort = options.iter().find(|option| {
@@ -466,7 +476,10 @@ fn thinking_level_map(model: &Value) -> Option<Value> {
         let Some(level) = value.as_str().filter(|s| !s.trim().is_empty()) else {
             continue;
         };
-        map.insert(level.to_owned(), Value::String(level.to_owned()));
+        let Some(canonical) = canonical_thinking_level(level) else {
+            continue;
+        };
+        map.insert(canonical.to_owned(), Value::String(level.to_owned()));
     }
     if map.is_empty() {
         None

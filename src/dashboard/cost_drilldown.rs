@@ -133,8 +133,11 @@ async fn query_drilldown(
 
     let accounting = pricing.accounting();
     let price = accounting.lookup(model, tenant.as_deref());
-    let prompt_price = price.prompt;
-    let completion_price = price.completion;
+    // `price` is USD per 1M tokens; the token counts are absolute. Dividing
+    // here (rather than at display time) is what the other cost views do —
+    // without it this page reported costs a million times too high.
+    let prompt_price = price.prompt / 1_000_000.0;
+    let completion_price = price.completion / 1_000_000.0;
     let total_cost = if prompt_price > 0.0 || completion_price > 0.0 {
         let cost = total_billable_prompt as f64 * prompt_price
             + total_completion as f64 * completion_price;

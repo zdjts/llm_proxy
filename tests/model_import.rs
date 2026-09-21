@@ -47,6 +47,35 @@ async fn imports_matching_registry_row_and_is_visible_after_refresh() {
 }
 
 #[tokio::test]
+async fn thinking_level_map_keys_are_canonicalised_on_import() {
+    // models.dev spells the disabled level `none` for xAI-style catalogs.
+    // Import must store it under the canonical key `off` while keeping the
+    // upstream wire value (`none`) intact, and drop non-canonical entries.
+    let (pool, _dir) = setup().await;
+    seed(&pool).await;
+    let json = source(
+        r#","reasoning_options":[{"type":"effort","values":["none","low","medium","high"]}]"#,
+    );
+    model_import::import_json(&pool, &json, false)
+        .await
+        .unwrap();
+    let caps: String =
+        sqlx::query_scalar("SELECT capabilities_json FROM model_registry WHERE id='grok-4.5_oa'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let caps: serde_json::Value = serde_json::from_str(&caps).unwrap();
+    let map = caps
+        .pointer("/metadata/thinkingLevelMap")
+        .and_then(|v| v.as_object())
+        .unwrap();
+    assert_eq!(map["off"], "none", "disabled level canonicalised to off");
+    assert_eq!(map["low"], "low");
+    assert_eq!(map["high"], "high");
+    assert!(map.get("none").is_none(), "legacy key must not survive");
+}
+
+#[tokio::test]
 async fn default_import_is_idempotent_and_protects_admin_row() {
     let (pool, _dir) = setup().await;
     seed(&pool).await;

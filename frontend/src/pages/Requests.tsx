@@ -171,7 +171,7 @@ export function RequestsPage() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr>
-                        {[t.requests.thTime, t.requests.thModel, t.requests.thPool, t.requests.thStatus, t.requests.thTokens, t.requests.thLatency, t.requests.thFinish, t.requests.thError, t.requests.thCost].map((header, i) => (
+                        {[t.requests.thTime, t.requests.thModel, t.requests.thPool, t.requests.thStatus, t.requests.thTokens, t.requests.thTtft, t.requests.thLatency, t.requests.thFinish, t.requests.thError, t.requests.thCost].map((header, i) => (
                           <th key={header} className={`border-b border-surface-200 p-3 font-operational text-[10px] font-semibold uppercase tracking-[0.1em] text-surface-400 ${i === 0 || i === 1 || i === 2 ? 'text-left' : 'text-right'}`}>{header}</th>
                         ))}
                       </tr>
@@ -184,6 +184,7 @@ export function RequestsPage() {
                           <td className="p-3 text-surface-500">{row.pool_id}</td>
                           <td className="p-3 text-right"><span className={`badge ${statusBadge(row.status_code)}`}>{row.status_code || '—'}</span></td>
                           <td className="p-3 text-right tabular-nums text-surface-600">{row.prompt_tokens || '0'} / {row.completion_tokens || '0'} / {row.cached_tokens || '0'}</td>
+                          <td className="p-3 text-right tabular-nums text-surface-600">{row.ttft_ms ?? <span className="text-surface-400">—</span>}</td>
                           <td className="p-3 text-right tabular-nums text-surface-600">{row.latency_ms}ms</td>
                           <td className="p-3 text-right text-surface-500">{row.finish_reason || '—'}</td>
                           <td className="p-3 text-right">{row.error_code ? <span className="font-medium text-danger">{row.error_code}</span> : <span className="text-surface-400">—</span>}</td>

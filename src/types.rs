@@ -233,6 +233,10 @@ pub struct ModelMetadata {
     pub input_types: Vec<String>,
     pub reasoning: bool,
     pub thinking_levels: Vec<String>,
+    /// Per-model `canonical level → upstream wire value` map. `None` when the
+    /// gateway has no per-model thinking vocabulary for the model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_level_map: Option<serde_json::Map<String, serde_json::Value>>,
     pub supports_tools: bool,
     pub supports_vision: bool,
     pub pricing: ModelMetadataPricing,

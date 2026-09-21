@@ -163,6 +163,7 @@ export interface Messages {
     thStatus: string;
     thTokens: string;
     thLatency: string;
+    thTtft: string;
     thRetry: string;
     thError: string;
     thCost: string;

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocaleProvider } from '@/i18n/context';
 import { fetchRequestDetail, fetchRequests } from '@/lib/api';
@@ -59,6 +59,35 @@ describe('request history page', () => {
     mockedFetchRequests.mockResolvedValue({ rows: [], filter: {}, tenants: [], total: 0, has_more: false });
     renderPage();
     expect(await screen.findByText('No requests in this window')).toBeInTheDocument();
+  });
+
+  it('renders a TTFT column ahead of latency', async () => {
+    mockedFetchRequests.mockResolvedValue({ rows: [sampleRow], filter: { hours: 0 }, tenants: ['default'], total: 1, has_more: false });
+    renderPage();
+    expect(await screen.findByText('gpt-4o')).toBeInTheDocument();
+
+    const headers = screen.getAllByRole('columnheader').map((h) => h.textContent);
+    expect(headers).toEqual(['Time', 'Model', 'Pool', 'Status', 'Tokens (P/C/Cached)', 'TTFT', 'Latency', 'Finish', 'Error', 'Cost']);
+
+    const cells = screen.getAllByRole('cell').map((c) => c.textContent);
+    expect(cells).toContain('80ms');
+    expect(cells).toContain('420ms');
+  });
+
+  it('renders a dash in the TTFT column for one-shot requests without TTFT', async () => {
+    mockedFetchRequests.mockResolvedValue({
+      rows: [{ ...sampleRow, ttft_ms: null }],
+      filter: { hours: 0 },
+      tenants: ['default'],
+      total: 1,
+      has_more: false,
+    });
+    renderPage();
+    expect(await screen.findByText('gpt-4o')).toBeInTheDocument();
+
+    const ttftIndex = screen.getAllByRole('columnheader').findIndex((h) => h.textContent === 'TTFT');
+    const row = screen.getAllByRole('row')[1];
+    expect(within(row).getAllByRole('cell')[ttftIndex].textContent).toBe('—');
   });
 
   it('lists each logged request and opens detail', async () => {

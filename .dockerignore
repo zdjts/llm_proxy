@@ -1,0 +1,8 @@
+/target
+/data
+/frontend/node_modules
+/frontend/dist
+config.yaml
+*.db
+*.db-shm
+*.db-wal

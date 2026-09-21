@@ -76,10 +76,9 @@ pub async fn admin_api_usage(
     let tenants = super::queries::query_tenant_list(&state.db).await?;
     let pricing = state.config_store.pricing().await;
     let accounting = pricing.accounting();
-    // Metadata pricing (models.dev catalog, kept in `model_registry`) is the
-    // fallback when no explicit `pricing.models` entry exists, so costs are
-    // not silently reported as zero.
-    let catalog_pricing = state.catalog.list_metadata().await;
+    // No separate catalog fallback: `pricing` is already composed from every
+    // layer (pricing_override → YAML `pricing:` → model_registry catalog),
+    // so the catalog price is reachable through `accounting` itself.
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -135,8 +134,7 @@ pub async fn admin_api_usage(
         })
         .collect();
     // Hourly cost needs a per-hour model breakdown; fetch it in one extra query.
-    let trend_costs =
-        hourly_costs(&state.db, hours, &accounting, &catalog_pricing, &q.tenant).await?;
+    let trend_costs = hourly_costs(&state.db, hours, &accounting, &q.tenant).await?;
     for point in &mut trend {
         point.cost_usd = trend_costs.get(&point.ts).copied().unwrap_or(0.0);
     }
@@ -166,7 +164,6 @@ pub async fn admin_api_usage(
         .map(|r| {
             let cost = model_cost(
                 &accounting,
-                &catalog_pricing,
                 &r.model,
                 q.tenant.as_deref(),
                 r.prompt_tokens,
@@ -191,7 +188,7 @@ pub async fn admin_api_usage(
         .collect();
 
     // ── Window summary + today summary (reuse the same aggregation) ──
-    let total = summarize(&model_rows);
+    let total = summarize(&model_rows, &accounting, q.tenant.as_deref());
     let today_rows: Vec<ModelRow> = sqlx::query_as(
         "SELECT model, \
                 SUM(request_count) AS requests, \
@@ -210,17 +207,7 @@ pub async fn admin_api_usage(
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Internal(format!("usage today query: {e}")))?;
-    let mut today = summarize(&today_rows);
-    for r in &today_rows {
-        today.cost_usd += model_cost(
-            &accounting,
-            &catalog_pricing,
-            &r.model,
-            q.tenant.as_deref(),
-            r.prompt_tokens,
-            r.completion_tokens,
-        );
-    }
+    let today = summarize(&today_rows, &accounting, q.tenant.as_deref());
 
     Ok(Json(UsageResponse {
         hours,
@@ -244,10 +231,31 @@ struct ModelRow {
     cached_tokens: i64,
 }
 
-fn summarize(rows: &[ModelRow]) -> UsageSummary {
+/// Aggregate a per-model breakdown into a window summary.
+///
+/// `pricing` / `catalog` / `tenant` are required because `cost_usd` is not a
+/// stored column — it must be recomputed from token counts with the same
+/// layered price table the request path uses.
+fn summarize(
+    rows: &[ModelRow],
+    pricing: &crate::config::pricing::AccountingPricing<'_>,
+    tenant: Option<&str>,
+) -> UsageSummary {
     let requests: i64 = rows.iter().map(|r| r.requests).sum();
     let success: i64 = rows.iter().map(|r| r.success).sum();
     let latency_ms_sum: i64 = rows.iter().map(|r| r.latency_ms_sum).sum();
+    let cost_usd = rows
+        .iter()
+        .map(|r| {
+            model_cost(
+                pricing,
+                &r.model,
+                tenant,
+                r.prompt_tokens,
+                r.completion_tokens,
+            )
+        })
+        .sum();
     UsageSummary {
         requests,
         errors: requests - success,
@@ -255,7 +263,7 @@ fn summarize(rows: &[ModelRow]) -> UsageSummary {
         completion_tokens: rows.iter().map(|r| r.completion_tokens).sum(),
         cached_tokens: rows.iter().map(|r| r.cached_tokens).sum(),
         avg_latency_ms: div(latency_ms_sum, requests),
-        cost_usd: 0.0,
+        cost_usd,
     }
 }
 
@@ -263,26 +271,23 @@ fn div(a: i64, b: i64) -> i64 {
     if b > 0 { a / b } else { 0 }
 }
 
-/// Per-model USD cost: explicit `pricing.models` entries first, then the
-/// models.dev catalog price from `model_registry`, else zero.
+/// Per-model USD cost for a token pair, or 0.0 when the model is unpriced.
+///
+/// Since the pricing carrier is now composed from every layer (DB override →
+/// YAML → catalog), this is a thin wrapper over the shared
+/// [`AccountingPricing::cost_usd`] that turns "unpriced" into 0.0 for
+/// summation. The old catalog fallback it replaces is gone: the catalog is
+/// already layer 4 of the composed table.
 fn model_cost(
     accounting: &crate::config::pricing::AccountingPricing<'_>,
-    catalog: &[crate::types::ModelMetadata],
     model: &str,
     tenant: Option<&str>,
     prompt_tokens: i64,
     completion_tokens: i64,
 ) -> f64 {
-    let price = accounting.lookup(model, tenant);
-    if price.prompt > 0.0 || price.completion > 0.0 {
-        return prompt_tokens as f64 * price.prompt / 1_000_000.0
-            + completion_tokens as f64 * price.completion / 1_000_000.0;
-    }
-    let Some(md) = catalog.iter().find(|m| m.id == model) else {
-        return 0.0;
-    };
-    prompt_tokens as f64 * md.pricing.input_usd_per_million_tokens / 1_000_000.0
-        + completion_tokens as f64 * md.pricing.output_usd_per_million_tokens / 1_000_000.0
+    accounting
+        .cost_usd(model, tenant, prompt_tokens, completion_tokens)
+        .unwrap_or(0.0)
 }
 
 fn hour_label(hour: i64) -> String {
@@ -295,7 +300,6 @@ async fn hourly_costs(
     pool: &SqlitePool,
     hours: i64,
     accounting: &crate::config::pricing::AccountingPricing<'_>,
-    catalog: &[crate::types::ModelMetadata],
     tenant: &Option<String>,
 ) -> Result<std::collections::HashMap<i64, f64>, AppError> {
     #[derive(sqlx::FromRow)]
@@ -327,7 +331,6 @@ async fn hourly_costs(
     for r in rows {
         let cost = model_cost(
             accounting,
-            catalog,
             &r.model,
             tenant.as_deref(),
             r.prompt_tokens,

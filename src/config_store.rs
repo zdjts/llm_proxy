@@ -48,6 +48,116 @@ pub async fn insert_key_entry(
     Ok(())
 }
 
+/// Current wall-clock time in epoch **milliseconds**, matching the units of
+/// `pricing_override.effective_from` / `effective_until`.
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+/// Build the effective accounting price table by layering four sources.
+///
+/// Later layers win over earlier ones (highest priority first):
+///
+/// 1. `pricing_override` row for this exact (model, tenant)
+/// 2. `pricing_override` row for this model with `tenant_id IS NULL`
+/// 3. the startup YAML `pricing:` snapshot (`bootstrap`)
+/// 4. `model_registry` catalog price (`import-models` writes these)
+///
+/// Layers 1–2 are DB-owned and hot-reloadable, which is why they outrank YAML
+/// (ADR-017: SQLite is authoritative for managed configuration). Layer 4 is
+/// last because ADR-017 forbids catalog/metadata prices from overriding an
+/// explicit accounting price — it is only the fallback that keeps costs from
+/// being silently zero for models nobody priced by hand.
+///
+/// A model is emitted only if some layer produced a price; otherwise the
+/// lookup falls through to `PricingConfig`'s zero entry and `compute_cost`
+/// records `NULL`, which is the pre-existing behaviour for unpriced models.
+fn compose_pricing(
+    bootstrap: &crate::config::pricing::PricingConfig,
+    catalog: &[ModelRegistryEntry],
+    overrides: &[PricingOverride],
+    now_ms: i64,
+) -> crate::config::pricing::PricingConfig {
+    use crate::config::pricing::{ModelPricing, PriceEntry};
+
+    let mut models: HashMap<String, ModelPricing> = HashMap::new();
+
+    // Layer 4 — catalog defaults.
+    for entry in catalog {
+        let price = PriceEntry {
+            prompt: entry.input_price_per_1m.unwrap_or(0.0),
+            completion: entry.output_price_per_1m.unwrap_or(0.0),
+        };
+        models.insert(
+            entry.id.clone(),
+            ModelPricing {
+                default: price,
+                tenants: HashMap::new(),
+            },
+        );
+    }
+
+    // Layer 3 — YAML `pricing:` overrides the catalog per model, and
+    // contributes the per-tenant entries the catalog cannot express.
+    for (model, yaml_pricing) in &bootstrap.models {
+        let slot = models.entry(model.clone()).or_insert_with(|| ModelPricing {
+            default: PriceEntry::default(),
+            tenants: HashMap::new(),
+        });
+        if yaml_pricing.default.prompt > 0.0 || yaml_pricing.default.completion > 0.0 {
+            slot.default = yaml_pricing.default.clone();
+        }
+        for (tenant, price) in &yaml_pricing.tenants {
+            slot.tenants.insert(tenant.clone(), price.clone());
+        }
+    }
+
+    // Layers 1–2 — DB overrides. Two passes so a tenant-specific row always
+    // wins over the global row regardless of insertion order.
+    for ov in overrides.iter().filter(|o| o.is_effective_at(now_ms)) {
+        if ov.tenant_id.is_some() {
+            continue;
+        }
+        let slot = models
+            .entry(ov.model_id.clone())
+            .or_insert_with(|| ModelPricing {
+                default: PriceEntry::default(),
+                tenants: HashMap::new(),
+            });
+        slot.default = PriceEntry {
+            prompt: ov.input_price_per_1m,
+            completion: ov.output_price_per_1m,
+        };
+    }
+    for ov in overrides
+        .iter()
+        .filter(|o| o.is_effective_at(now_ms) && o.tenant_id.is_some())
+    {
+        let tenant = match ov.tenant_id.as_deref() {
+            Some(t) => t,
+            None => continue,
+        };
+        let slot = models
+            .entry(ov.model_id.clone())
+            .or_insert_with(|| ModelPricing {
+                default: PriceEntry::default(),
+                tenants: HashMap::new(),
+            });
+        slot.tenants.insert(
+            tenant.to_owned(),
+            PriceEntry {
+                prompt: ov.input_price_per_1m,
+                completion: ov.output_price_per_1m,
+            },
+        );
+    }
+
+    crate::config::pricing::PricingConfig { models }
+}
+
 fn parse_cred_type(raw: Option<&str>) -> CredentialType {
     match raw {
         Some(s) if s.eq_ignore_ascii_case("oauth") => CredentialType::Oauth,
@@ -56,6 +166,35 @@ fn parse_cred_type(raw: Option<&str>) -> CredentialType {
 }
 
 // ── In-memory config snapshots ──
+
+/// A row of `pricing_override` — the DB-owned accounting price for one
+/// (model, tenant) pair, optionally bounded by a validity window.
+///
+/// `effective_from` / `effective_until` are epoch **milliseconds** (the table
+/// defaults to `unixepoch('subsec') * 1000`).
+#[derive(Debug, Clone)]
+pub struct PricingOverride {
+    pub model_id: String,
+    /// `None` means "applies to every tenant".
+    pub tenant_id: Option<String>,
+    pub input_price_per_1m: f64,
+    pub output_price_per_1m: f64,
+    pub effective_from: i64,
+    pub effective_until: Option<i64>,
+}
+
+impl PricingOverride {
+    /// Whether this row is in force at `now_ms`.
+    pub fn is_effective_at(&self, now_ms: i64) -> bool {
+        if now_ms < self.effective_from {
+            return false;
+        }
+        match self.effective_until {
+            None => true,
+            Some(until) => now_ms < until,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ModelRegistryEntry {
@@ -110,9 +249,15 @@ pub struct ConfigSnapshot {
     pub model_routing: Arc<HashMap<String, ModelRouting>>,
     pub model_registry: Arc<Vec<ModelRegistryEntry>>,
     pub model_metadata: Arc<ModelMetadataConfig>,
-    /// Pricing is a bootstrap/static carrier until a DB pricing table exists.
-    /// It is shared by request accounting and dashboard cost views.
+    /// The **composed** accounting price table: DB overrides over the YAML
+    /// base layer over the `model_registry` catalog price. This is what
+    /// request accounting and the dashboard cost views read.
     pub pricing: Arc<crate::config::pricing::PricingConfig>,
+    /// Layer 3 of the pricing stack: the startup YAML `pricing:` snapshot.
+    /// Kept separately because [`ConfigStore::refresh_from_db`] must recompose
+    /// `pricing` without losing it (ADR-017: YAML is a base layer, not the
+    /// authority, for managed configuration).
+    bootstrap_pricing: Arc<crate::config::pricing::PricingConfig>,
     pub runtime: Arc<RuntimePolicy>,
     pub version: u64,
 }
@@ -126,6 +271,7 @@ impl Default for ConfigSnapshot {
             model_registry: Arc::new(Vec::new()),
             model_metadata: Arc::new(ModelMetadataConfig::default()),
             pricing: Arc::new(crate::config::pricing::PricingConfig::default()),
+            bootstrap_pricing: Arc::new(crate::config::pricing::PricingConfig::default()),
             runtime: Arc::new(RuntimePolicy::default()),
             version: 0,
         }
@@ -153,8 +299,18 @@ impl ConfigStore {
         }
     }
 
+    /// Install the startup YAML `pricing:` snapshot as the **base layer** and
+    /// recompose the effective price table.
+    ///
+    /// This does not overwrite DB-owned overrides: [`Self::refresh_from_db`]
+    /// keeps `bootstrap_pricing` around precisely so a refresh cannot drop it.
     pub async fn set_bootstrap_pricing(&self, pricing: crate::config::pricing::PricingConfig) {
-        self.inner.write().await.pricing = Arc::new(pricing);
+        self.inner.write().await.bootstrap_pricing = Arc::new(pricing);
+        if let Err(e) = self.refresh_pricing().await {
+            // A pricing load failure must not take the gateway down; the
+            // previously composed table stays in force.
+            tracing::error!(error = %e, "ConfigStore: pricing recompose failed");
+        }
     }
 
     pub async fn pricing(&self) -> Arc<crate::config::pricing::PricingConfig> {
@@ -332,16 +488,84 @@ impl ConfigStore {
         let pool_configs = self.load_pools_from_db().await?;
         let model_routing = self.load_routing_from_db().await?;
         let model_registry = self.load_model_registry_from_db().await?;
+        let pricing_overrides = self.load_pricing_overrides_from_db().await?;
 
         let mut current = self.inner.write().await;
         current.providers = Arc::new(providers);
         current.pool_configs = Arc::new(pool_configs);
         current.model_routing = Arc::new(model_routing);
         current.model_registry = Arc::new(model_registry);
+        // Layer 4 (catalog) was just reloaded; recompose the price table so a
+        // registry price edit takes effect without a restart.
+        current.pricing = Arc::new(compose_pricing(
+            &current.bootstrap_pricing,
+            &current.model_registry,
+            &pricing_overrides,
+            now_ms(),
+        ));
         current.version += 1;
 
-        tracing::debug!(version = current.version, "ConfigStore: cache refreshed");
+        let version = current.version;
+        drop(current);
+
+        tracing::debug!(version, "ConfigStore: cache refreshed");
         Ok(())
+    }
+
+    /// Recompose the effective price table without reloading other sections.
+    ///
+    /// Used by [`Self::set_bootstrap_pricing`], which installs the YAML base
+    /// layer at startup — after `load()` has already populated the catalog.
+    async fn refresh_pricing(&self) -> Result<(), AppError> {
+        let model_registry = self.load_model_registry_from_db().await?;
+        let pricing_overrides = self.load_pricing_overrides_from_db().await?;
+
+        let mut current = self.inner.write().await;
+        current.model_registry = Arc::new(model_registry);
+        current.pricing = Arc::new(compose_pricing(
+            &current.bootstrap_pricing,
+            &current.model_registry,
+            &pricing_overrides,
+            now_ms(),
+        ));
+        Ok(())
+    }
+
+    /// Load every `pricing_override` row, including expired ones.
+    ///
+    /// Validity windows are evaluated in [`compose_pricing`] against a single
+    /// consistent `now`, so a mid-load clock tick cannot split a window.
+    async fn load_pricing_overrides_from_db(&self) -> Result<Vec<PricingOverride>, AppError> {
+        #[derive(sqlx::FromRow)]
+        struct DbOverride {
+            model_id: String,
+            tenant_id: Option<String>,
+            input_price_per_1m: f64,
+            output_price_per_1m: f64,
+            effective_from: i64,
+            effective_until: Option<i64>,
+        }
+
+        let rows: Vec<DbOverride> = sqlx::query_as(
+            "SELECT model_id, tenant_id, input_price_per_1m, output_price_per_1m, \
+             effective_from, effective_until \
+             FROM pricing_override",
+        )
+        .fetch_all(&self.db)
+        .await
+        .map_err(|e| AppError::Internal(format!("ConfigStore load pricing_override: {e}")))?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| PricingOverride {
+                model_id: r.model_id,
+                tenant_id: r.tenant_id,
+                input_price_per_1m: r.input_price_per_1m,
+                output_price_per_1m: r.output_price_per_1m,
+                effective_from: r.effective_from,
+                effective_until: r.effective_until,
+            })
+            .collect())
     }
 
     async fn load_providers_from_db(&self) -> Result<Vec<ProviderConfig>, AppError> {
@@ -723,6 +947,248 @@ mod tests {
             v2 > v1,
             "version should increment even on no-change refresh"
         );
+    }
+
+    // ── Pricing layering (ADR-017: DB-owned accounting prices) ───────────
+    //
+    // The four layers, highest priority first:
+    //   1. pricing_override for (model, tenant)
+    //   2. pricing_override for model with tenant_id IS NULL
+    //   3. startup YAML `pricing:` snapshot
+    //   4. model_registry catalog price (written by import-models)
+    // Layer 4 matters because it is what makes cost non-zero for models
+    // nobody priced by hand — the exact bug that left request_log.cost_usd
+    // NULL for every row.
+
+    fn pricing_yaml_with_model() -> crate::config::pricing::PricingConfig {
+        serde_yaml::from_str("yaml-model:\n  prompt: 5.0\n  completion: 20.0")
+            .expect("yaml pricing fixture parses")
+    }
+
+    async fn insert_catalog_model(pool: &SqlitePool, id: &str, input: f64, output: f64) {
+        sqlx::query(
+            "INSERT INTO model_registry (id, display_name, provider_kind, \
+             max_context_tokens, max_output_tokens, \
+             input_price_per_1m, output_price_per_1m, enabled) \
+             VALUES (?1, ?1, 'openai', 1000, 1000, ?2, ?3, 1)",
+        )
+        .bind(id)
+        .bind(input)
+        .bind(output)
+        .execute(pool)
+        .await
+        .expect("catalog model insert");
+    }
+
+    #[tokio::test]
+    async fn pricing_layer4_catalog_fills_pricing_carrier() {
+        // The regression this locks in: with no YAML `pricing:` section and no
+        // overrides, a model priced only in model_registry must still resolve
+        // to a non-zero accounting price, so compute_cost records a cost.
+        let (pool, _dir) = setup_test_db().await;
+        insert_catalog_model(&pool, "catalog-model", 1.5, 6.0).await;
+
+        let store = ConfigStore::load(pool).await.unwrap();
+        let price = store.pricing().await;
+        let looked = price.lookup("catalog-model", None);
+        assert_eq!(
+            (looked.prompt, looked.completion),
+            (1.5, 6.0),
+            "layer 4 (model_registry) must populate the accounting carrier"
+        );
+    }
+
+    #[tokio::test]
+    async fn pricing_layer3_yaml_beats_catalog() {
+        let (pool, _dir) = setup_test_db().await;
+        insert_catalog_model(&pool, "shared-model", 1.5, 6.0).await;
+
+        let store = ConfigStore::load(pool).await.unwrap();
+        // set_bootstrap_pricing installs layer 3 *after* load(), mimicking
+        // bootstrap.rs ordering.
+        let mut yaml = crate::config::pricing::PricingConfig::default();
+        yaml.models.insert(
+            "shared-model".to_string(),
+            crate::config::pricing::ModelPricing {
+                default: crate::config::pricing::PriceEntry {
+                    prompt: 9.0,
+                    completion: 90.0,
+                },
+                tenants: std::collections::HashMap::new(),
+            },
+        );
+        store.set_bootstrap_pricing(yaml).await;
+
+        let price = store.pricing().await;
+        let looked = price.lookup("shared-model", None);
+        assert_eq!(
+            (looked.prompt, looked.completion),
+            (9.0, 90.0),
+            "layer 3 (YAML) must override layer 4 (catalog)"
+        );
+    }
+
+    #[tokio::test]
+    async fn pricing_layer1_and_2_db_override_beats_yaml() {
+        let (pool, _dir) = setup_test_db().await;
+        insert_catalog_model(&pool, "m", 1.0, 2.0).await;
+
+        let store = ConfigStore::load(pool.clone()).await.unwrap();
+        store.set_bootstrap_pricing(pricing_yaml_with_model()).await;
+
+        // Layer 2: global override (tenant_id NULL).
+        sqlx::query(
+            "INSERT INTO pricing_override \
+             (model_id, tenant_id, input_price_per_1m, output_price_per_1m, effective_from) \
+             VALUES ('m', NULL, 3.0, 4.0, 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // Layer 1: tenant-specific override.
+        sqlx::query(
+            "INSERT INTO pricing_override \
+             (model_id, tenant_id, input_price_per_1m, output_price_per_1m, effective_from) \
+             VALUES ('m', 'vip', 7.0, 8.0, 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        store.refresh_from_db().await.unwrap();
+        let price = store.pricing().await;
+
+        let vip = price.lookup("m", Some("vip"));
+        assert_eq!(
+            (vip.prompt, vip.completion),
+            (7.0, 8.0),
+            "layer 1 (tenant override) must win"
+        );
+
+        let global = price.lookup("m", None);
+        assert_eq!(
+            (global.prompt, global.completion),
+            (3.0, 4.0),
+            "layer 2 (global override) must beat YAML and catalog"
+        );
+
+        let other = price.lookup("m", Some("other"));
+        assert_eq!(
+            (other.prompt, other.completion),
+            (3.0, 4.0),
+            "an unlisted tenant falls back to the global override"
+        );
+    }
+
+    #[tokio::test]
+    async fn pricing_override_outside_validity_window_is_ignored() {
+        let (pool, _dir) = setup_test_db().await;
+        insert_catalog_model(&pool, "m", 1.0, 2.0).await;
+
+        let store = ConfigStore::load(pool.clone()).await.unwrap();
+
+        let now = now_ms();
+        // Expired one hour ago.
+        sqlx::query(
+            "INSERT INTO pricing_override \
+             (model_id, tenant_id, input_price_per_1m, output_price_per_1m, \
+              effective_from, effective_until) \
+             VALUES ('m', NULL, 50.0, 60.0, ?1, ?2)",
+        )
+        .bind(now - 7_200_000)
+        .bind(now - 3_600_000)
+        .execute(&pool)
+        .await
+        .unwrap();
+        // Not yet in force (starts one hour from now).
+        sqlx::query(
+            "INSERT INTO pricing_override \
+             (model_id, tenant_id, input_price_per_1m, output_price_per_1m, effective_from) \
+             VALUES ('m', NULL, 70.0, 80.0, ?1)",
+        )
+        .bind(now + 3_600_000)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        store.refresh_from_db().await.unwrap();
+        let price = store.pricing().await;
+        let looked = price.lookup("m", None);
+        assert_eq!(
+            (looked.prompt, looked.completion),
+            (1.0, 2.0),
+            "expired and future overrides must not apply; layer 4 stays"
+        );
+    }
+
+    #[tokio::test]
+    async fn pricing_hot_reload_picks_up_new_override() {
+        // Editing pricing_override in the DB must change the effective price
+        // after refresh_from_db(), with no restart.
+        let (pool, _dir) = setup_test_db().await;
+        insert_catalog_model(&pool, "m", 1.0, 2.0).await;
+        let store = ConfigStore::load(pool.clone()).await.unwrap();
+
+        let before = store.pricing().await.lookup("m", None).clone();
+        assert_eq!((before.prompt, before.completion), (1.0, 2.0));
+
+        sqlx::query(
+            "INSERT INTO pricing_override \
+             (model_id, tenant_id, input_price_per_1m, output_price_per_1m, effective_from) \
+             VALUES ('m', NULL, 11.0, 12.0, 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        store.refresh_from_db().await.unwrap();
+
+        let after = store.pricing().await.lookup("m", None).clone();
+        assert_eq!(
+            (after.prompt, after.completion),
+            (11.0, 12.0),
+            "a new override must be visible after refresh_from_db"
+        );
+    }
+
+    #[tokio::test]
+    async fn pricing_refresh_preserves_yaml_base_layer() {
+        // Guard against the ordering hazard in bootstrap.rs: set_bootstrap_pricing
+        // runs after load(), so a later refresh must not wipe the YAML layer.
+        let (pool, _dir) = setup_test_db().await;
+        insert_catalog_model(&pool, "other-model", 1.0, 1.0).await;
+        let store = ConfigStore::load(pool.clone()).await.unwrap();
+
+        let mut yaml = crate::config::pricing::PricingConfig::default();
+        yaml.models.insert(
+            "other-model".to_string(),
+            crate::config::pricing::ModelPricing {
+                default: crate::config::pricing::PriceEntry {
+                    prompt: 42.0,
+                    completion: 43.0,
+                },
+                tenants: std::collections::HashMap::new(),
+            },
+        );
+        store.set_bootstrap_pricing(yaml).await;
+        store.refresh_from_db().await.unwrap();
+
+        let price = store.pricing().await;
+        let looked = price.lookup("other-model", None);
+        assert_eq!(
+            (looked.prompt, looked.completion),
+            (42.0, 43.0),
+            "refresh_from_db must not drop the YAML base layer"
+        );
+    }
+
+    #[tokio::test]
+    async fn unpriced_model_still_looks_up_zero() {
+        // A model absent from every layer keeps the pre-existing zero-price
+        // behaviour, so compute_cost records NULL rather than inventing a cost.
+        let (pool, _dir) = setup_test_db().await;
+        let store = ConfigStore::load(pool).await.unwrap();
+        let looked = store.pricing().await.lookup("never-seen", None).clone();
+        assert_eq!((looked.prompt, looked.completion), (0.0, 0.0));
     }
 
     // ── T177: Hot-reload regression tests ───────────────────────────────

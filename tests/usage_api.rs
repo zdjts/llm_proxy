@@ -169,6 +169,79 @@ async fn usage_returns_summary_trend_and_model_breakdown() {
 }
 
 #[tokio::test]
+async fn usage_window_cost_is_not_zero_when_catalog_prices_exist() {
+    // Regression: `UsageSummary.cost_usd` was hard-coded to 0.0 in
+    // `summarize()`, so the window cost card always read $0.00 even while the
+    // per-model rows showed real money. It also pins the pricing layering:
+    // the only price source here is model_registry (layer 4) — there is no
+    // YAML `pricing:` section and no pricing_override row.
+    let (pool, _dir, state) = setup().await;
+
+    sqlx::query(
+        "INSERT INTO model_registry (id, display_name, provider_kind, \
+         max_context_tokens, max_output_tokens, \
+         input_price_per_1m, output_price_per_1m, enabled) \
+         VALUES ('gpt-test', 'gpt-test', 'openai', 1000, 1000, 2.0, 8.0, 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // The store must pick the catalog price up from the DB, exactly as the
+    // running gateway does after `import-models`.
+    state.config_store.refresh_from_db().await.unwrap();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let now_hour = (now / 3600) * 3600;
+    // 10 requests x (100 prompt, 50 completion) = 1000 prompt, 500 completion.
+    seed_row(&pool, now_hour, "gpt-test", 10, 0).await;
+
+    let response = app(state)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/api/usage?hours=24")
+                .header("x-real-ip", "127.0.0.1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // 1000/1M * 2.0 + 500/1M * 8.0 = 0.002 + 0.004 = 0.006
+    let expected = 0.006;
+    let total_cost = json["total"]["cost_usd"].as_f64().unwrap();
+    assert!(
+        (total_cost - expected).abs() < 1e-9,
+        "window cost must aggregate model costs, got {total_cost}, expected {expected}"
+    );
+    let today_cost = json["today"]["cost_usd"].as_f64().unwrap();
+    assert!(
+        (today_cost - expected).abs() < 1e-9,
+        "today cost must match, got {today_cost}"
+    );
+    let trend_cost: f64 = json["trend"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["cost_usd"].as_f64().unwrap())
+        .sum();
+    assert!(
+        (trend_cost - expected).abs() < 1e-9,
+        "trend cost must sum to the same total, got {trend_cost}"
+    );
+}
+
+#[tokio::test]
 async fn usage_tenant_filter_excludes_other_tenants() {
     let (pool, _dir, state) = setup().await;
     let now = std::time::SystemTime::now()

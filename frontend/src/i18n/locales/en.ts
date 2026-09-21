@@ -157,6 +157,7 @@ const en: Messages = {
     thStatus: 'Status',
     thTokens: 'Tokens (P/C/Cached)',
     thLatency: 'Latency',
+    thTtft: 'TTFT',
     thRetry: 'Retry',
     thError: 'Error',
     thCost: 'Cost',
